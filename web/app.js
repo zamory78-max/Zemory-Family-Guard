@@ -6,7 +6,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
   getFirestore, collection, query, where, orderBy, limit, onSnapshot, doc, updateDoc, addDoc,
-  deleteDoc, serverTimestamp, arrayUnion, arrayRemove, deleteField, FieldPath, setDoc, getDoc, Timestamp,
+  deleteDoc, serverTimestamp, arrayUnion, arrayRemove, deleteField, FieldPath,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const $app = document.getElementById("app");
@@ -278,69 +278,98 @@ function renderDevices() {
   document.getElementById("addDevice").onclick = showAddDevice;
 }
 
-// ---------- pairing ----------
-let pairingUnsub = null;
-let pairingTimer = null;
-function stopPairing() {
-  if (pairingUnsub) { pairingUnsub(); pairingUnsub = null; }
-  if (pairingTimer) { clearInterval(pairingTimer); pairingTimer = null; }
+// ---------- add device (child account) ----------
+const DEFAULT_POLICY = {
+  blocked: [], hidden: [], pinLocked: [], limits: {}, pinHash: "",
+  restrictions: {
+    no_factory_reset: true, no_add_user: true, no_safe_boot: true, no_install_unknown_sources: true,
+    no_config_date_time: true, no_control_apps: true, lock_settings: true,
+  },
+  web: { filter: false, log: true, safeSearch: false, blocked: [] },
+  bedtime: { enabled: false, start: "21:00", end: "07:00", allowed: [] },
+  pauseAll: false,
+};
+
+// A second Firebase app instance so creating the child's account does not sign the parent out
+let childAuth = null;
+function getChildAuth() {
+  if (!childAuth) childAuth = getAuth(initializeApp(config, "child-accounts"));
+  return childAuth;
 }
 
-async function createPairingCode() {
-  for (let i = 0; i < 5; i++) {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    const ref = doc(db, "pairings", code);
-    const existing = await getDoc(ref).catch(() => null);
-    if (existing && existing.exists()) continue;
-    const expiresAt = Timestamp.fromMillis(Date.now() + 15 * 60 * 1000);
-    await setDoc(ref, { ownerUid: S.user.uid, used: false, createdAt: serverTimestamp(), expiresAt });
-    return { code, expiresAt: expiresAt.toMillis() };
+async function createChildAccount(email, password) {
+  const a = getChildAuth();
+  let cred;
+  try {
+    cred = await createUserWithEmailAndPassword(a, email, password);
+  } catch (e) {
+    if (e.code !== "auth/email-already-in-use") throw e;
+    cred = await signInWithEmailAndPassword(a, email, password); // reuse an existing child account
   }
-  throw new Error("تعذّر إنشاء رمز، حاول مجدداً");
+  const uid = cred.user.uid;
+  await signOut(a);
+  return uid;
 }
 
-async function showAddDevice() {
-  stopPairing();
+function showAddDevice() {
   const apk = childApkUrl();
-  openModal(`<h2>إضافة جهاز</h2><div class="empty">جارٍ إنشاء رمز الربط…</div>`);
-  let p;
-  try { p = await createPairingCode(); }
-  catch (e) { console.error(e); openModal(`<h2>إضافة جهاز</h2><p class="notice">تعذّر إنشاء الرمز: ${esc(e.code || e.message)}</p><div class="row"><span class="spacer"></span><button class="btn" data-close>إغلاق</button></div>`); return; }
-
   openModal(`
-    <h2>إضافة جهاز (هاتف، تابلت أو تلفاز أندرويد)</h2>
-    <ol class="small" style="padding-inline-start:18px;margin:0">
-      <li>ثبّت تطبيق <b>Zemory Family Guard</b> (FamilyGuard-Child.apk) على جهاز الطفل${apk ? ` — <a href="${esc(apk)}" target="_blank" rel="noopener">رابط التنزيل</a>` : ""}.</li>
-      <li>افتحه واكتب رمز الربط:</li>
-    </ol>
-    <div class="pair-code mono">${p.code.slice(0, 3)} ${p.code.slice(3)}</div>
-    <p class="small muted" style="text-align:center;margin:0" id="pairLeft"></p>
-    <ol class="small" start="3" style="padding-inline-start:18px;margin:0">
-      <li>اتبع خطوات الإعداد التي تظهر على جهاز الطفل حتى تظهر «✅ الحماية مكتملة».</li>
-      <li>ثم عيّن <b>رمز الوالد</b> من صفحة الجهاز ← القيود والإعدادات.</li>
-    </ol>
-    <div class="row"><span class="spacer"></span><button class="btn" data-close>إغلاق</button></div>`);
+    <h2>إضافة جهاز</h2>
+    <p class="small muted" style="margin:0">أنشئ حساباً خاصاً لهذا الجهاز. البريد لا يحتاج أن يكون حقيقياً، مثلاً <span class="mono">ahmed.phone@family.dz</span></p>
+    <form class="stack" id="addForm">
+      <label class="field"><span>اسم الجهاز</span><input class="input" id="dName" required maxlength="40" placeholder="هاتف أحمد"></label>
+      <label class="field"><span>النوع</span>
+        <select class="input" id="dType"><option value="phone">📱 هاتف</option><option value="tablet">💻 تابلت</option><option value="tv">📺 تلفاز</option></select></label>
+      <label class="field"><span>بريد الجهاز</span><input class="input mono" id="dEmail" type="email" required dir="ltr" autocomplete="off"></label>
+      <label class="field"><span>كلمة مرور الجهاز (6 أحرف على الأقل)</span><input class="input mono" id="dPass" type="text" required minlength="6" dir="ltr" autocomplete="off"></label>
+      <div class="row"><span class="spacer"></span><button class="btn" type="button" data-close>إلغاء</button><button class="btn primary" type="submit" id="dSave">إنشاء</button></div>
+    </form>`);
 
-  const left = () => {
-    const el = document.getElementById("pairLeft");
-    if (!el) { stopPairing(); return; }
-    const ms = p.expiresAt - Date.now();
-    if (ms <= 0) { el.textContent = "انتهت صلاحية الرمز — أغلق وافتح «إضافة جهاز» من جديد"; stopPairing(); return; }
-    const m = Math.floor(ms / 60000), sec = Math.floor((ms % 60000) / 1000);
-    el.textContent = `صالح لمدة ${m}:${String(sec).padStart(2, "0")} — بانتظار الجهاز…`;
-  };
-  left();
-  pairingTimer = setInterval(left, 1000);
-  pairingUnsub = onSnapshot(doc(db, "pairings", p.code), (snap) => {
-    const v = snap.data();
-    if (v && v.used && v.deviceId) {
-      stopPairing();
-      closeModal();
-      toast("تم ربط الجهاز ✅");
-      deleteDoc(doc(db, "pairings", p.code)).catch(() => {});
-      setTimeout(() => { if (S.devices.has(v.deviceId)) openDevice(v.deviceId); }, 800);
+  document.getElementById("addForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("dName").value.trim();
+    const type = document.getElementById("dType").value;
+    const email = document.getElementById("dEmail").value.trim().toLowerCase();
+    const pass = document.getElementById("dPass").value;
+    if (email === (S.user.email || "").toLowerCase()) return toast("استعمل بريداً مختلفاً عن بريدك");
+    const btn = document.getElementById("dSave");
+    btn.disabled = true; btn.textContent = "جارٍ الإنشاء…";
+    try {
+      const childUid = await createChildAccount(email, pass);
+      const existing = [...S.devices.values()].find((d) => d.deviceUid === childUid);
+      let id = existing && existing.id;
+      if (!id) {
+        const ref = await addDoc(collection(db, "devices"), {
+          ownerUid: S.user.uid, deviceUid: childUid, deviceEmail: email,
+          name, type, createdAt: serverTimestamp(), policy: DEFAULT_POLICY,
+        });
+        id = ref.id;
+      }
+      openModal(`
+        <h2>✅ تم إنشاء «${esc(name)}»</h2>
+        <ol class="small" style="padding-inline-start:18px;margin:0">
+          <li>ثبّت <b>Zemory Family Guard</b> (FamilyGuard-Child.apk) على جهاز الطفل${apk ? ` — <a href="${esc(apk)}" target="_blank" rel="noopener">رابط التنزيل</a>` : ""}.</li>
+          <li>افتحه واكتب:</li>
+        </ol>
+        <pre class="code">${esc(email)}\n${esc(pass)}</pre>
+        <ol class="small" start="3" style="padding-inline-start:18px;margin:0">
+          <li>اتبع خطوات الإعداد على جهاز الطفل حتى «✅ الحماية مكتملة».</li>
+          <li>عيّن <b>رمز الوالد</b> من صفحة الجهاز ← القيود والإعدادات.</li>
+        </ol>
+        <p class="small muted">احتفظ بالبريد وكلمة المرور، ستحتاجهما إذا أعدت تثبيت التطبيق على الجهاز.</p>
+        <div class="row"><span class="spacer"></span><button class="btn primary" data-close>تم</button></div>`);
+    } catch (err) {
+      console.error(err);
+      const map = {
+        "auth/invalid-email": "صيغة البريد غير صحيحة",
+        "auth/weak-password": "كلمة المرور ضعيفة (6 أحرف على الأقل)",
+        "auth/wrong-password": "هذا البريد مستعمل بكلمة مرور أخرى",
+        "auth/invalid-credential": "هذا البريد مستعمل بكلمة مرور أخرى",
+      };
+      toast(map[err.code] || "خطأ: " + (err.code || err.message));
+      btn.disabled = false; btn.textContent = "إنشاء";
     }
-  });
+  };
 }
 
 // ---------- device detail ----------

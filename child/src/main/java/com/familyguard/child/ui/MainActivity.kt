@@ -30,7 +30,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -50,24 +49,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.familyguard.child.BuildConfig
 import com.familyguard.child.Guard
-import com.familyguard.child.Policy
 import com.familyguard.child.Prefs
 import com.familyguard.child.admin.Dpm
 import com.familyguard.child.sync.GuardService
 import com.familyguard.child.sync.Repo
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
-import java.util.UUID
 
 class MainActivity : ComponentActivity() {
 
@@ -135,56 +134,48 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ---------------- Pairing ----------------
+    // ---------------- Linking (child account) ----------------
 
     @Composable
     private fun Pairing(onDone: () -> Unit) {
         val scope = rememberCoroutineScope()
-        var code by remember { mutableStateOf("") }
-        var name by remember { mutableStateOf("") }
-        val isTv = remember { packageManager.hasSystemFeature("android.software.leanback") }
-        var type by remember { mutableStateOf(if (isTv) "tv" else "phone") }
+        var email by remember { mutableStateOf("") }
+        var password by remember { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         var err by remember { mutableStateOf<String?>(null) }
 
         Text("ربط هذا الجهاز", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
-            "في تطبيق الوالد اضغط «إضافة جهاز»، وسيظهر لك رمز من 6 أرقام. اكتبه هنا.",
+            "اكتب بريد وكلمة مرور هذا الجهاز، كما أنشأهما الوالد في تطبيقه من «إضافة جهاز».",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(16.dp))
         OutlinedTextField(
-            code, { v -> code = v.filter { it.isDigit() }.take(6) },
-            label = { Text("رمز الربط") }, singleLine = true,
-            textStyle = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            email, { email = it.trim() }, label = { Text("البريد الإلكتروني للجهاز") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
-            name, { name = it.take(40) }, label = { Text("اسم الجهاز (مثلاً: هاتف أحمد)") }, singleLine = true,
+            password, { password = it }, label = { Text("كلمة المرور") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(type == "phone", { type = "phone" }, label = { Text("📱 هاتف") })
-            FilterChip(type == "tablet", { type = "tablet" }, label = { Text("💻 تابلت") })
-            FilterChip(type == "tv", { type = "tv" }, label = { Text("📺 تلفاز") })
-        }
         err?.let {
             Spacer(Modifier.height(8.dp))
             Text(it, color = MaterialTheme.colorScheme.error)
         }
         Spacer(Modifier.height(16.dp))
         Button(
-            enabled = !busy && code.length == 6 && name.isNotBlank(),
+            enabled = !busy && email.contains('@') && password.length >= 6,
             onClick = {
                 busy = true
                 err = null
                 scope.launch {
                     try {
-                        pair(code, name.trim(), type)
+                        link(email, password)
                         onDone()
                     } catch (e: Exception) {
                         err = friendlyError(e)
@@ -199,53 +190,45 @@ class MainActivity : ComponentActivity() {
     private fun friendlyError(e: Exception): String {
         val msg = e.message.orEmpty()
         return when {
-            e is PairingException -> e.message ?: "تعذّر الربط"
+            e is LinkException -> e.message ?: "تعذّر الربط"
+            e is FirebaseAuthInvalidCredentialsException || e is FirebaseAuthInvalidUserException ->
+                "البريد أو كلمة المرور غير صحيحة."
             e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ->
-                "الرمز غير صحيح أو انتهت صلاحيته. أنشئ رمزاً جديداً من تطبيق الوالد."
-            msg.contains("ADMIN_ONLY_OPERATION") || msg.contains("OPERATION_NOT_ALLOWED") ->
-                "تسجيل الدخول المجهول غير مفعّل في Firebase (Authentication ← Anonymous)."
+                "لا توجد صلاحية. تأكد أن قواعد Firestore محدّثة."
             msg.contains("network", ignoreCase = true) || msg.contains("UNAVAILABLE") ->
                 "لا يوجد اتصال بالإنترنت. تأكد من الشبكة وأعد المحاولة."
             else -> "تعذّر الربط: $msg"
         }
     }
 
-    private class PairingException(message: String) : Exception(message)
+    private class LinkException(message: String) : Exception(message)
 
-    private suspend fun pair(code: String, name: String, type: String) {
+    private suspend fun link(email: String, password: String) {
         val auth = FirebaseAuth.getInstance()
-        val uid = (auth.currentUser ?: auth.signInAnonymously().await().user)?.uid
-            ?: throw PairingException("فشل تسجيل الدخول")
+        auth.signOut()
+        val uid = auth.signInWithEmailAndPassword(email, password).await().user?.uid
+            ?: throw LinkException("فشل تسجيل الدخول")
 
-        val pairRef = Repo.db.collection("pairings").document(code)
-        val pairing = pairRef.get().await()
-        if (!pairing.exists()) throw PairingException("الرمز غير صحيح. تأكد من الأرقام.")
-        if (pairing.getBoolean("used") == true) throw PairingException("هذا الرمز استُعمل من قبل. أنشئ رمزاً جديداً.")
-        val expires = pairing.getTimestamp("expiresAt")?.toDate()?.time ?: 0L
-        if (expires < System.currentTimeMillis()) throw PairingException("انتهت صلاحية الرمز. أنشئ رمزاً جديداً.")
-        val owner = pairing.getString("ownerUid") ?: throw PairingException("رمز غير صالح")
-
-        val id = UUID.randomUUID().toString().replace("-", "").take(20)
-        val data = hashMapOf<String, Any>(
-            "ownerUid" to owner,
-            "deviceUid" to uid,
-            "pairCode" to code,
-            "name" to name,
-            "type" to type,
-            "model" to "${Build.MANUFACTURER} ${Build.MODEL}",
-            "sdk" to Build.VERSION.SDK_INT,
-            "appVersion" to BuildConfig.VERSION_NAME,
-            "createdAt" to FieldValue.serverTimestamp(),
-            "lastSeen" to FieldValue.serverTimestamp(),
-            "status" to GuardService.statusMap(this),
-            "policy" to Policy.defaultMap(),
-        )
-        Repo.device(id).set(data).await()
-        pairRef.update(mapOf("used" to true, "deviceId" to id)).await()
+        val found = Repo.db.collection("devices").whereEqualTo("deviceUid", uid).limit(1).get().await()
+        val doc = found.documents.firstOrNull()
+        if (doc == null) {
+            auth.signOut()
+            throw LinkException("هذا الحساب غير مرتبط بأي جهاز. أضف الجهاز أولاً من تطبيق الوالد.")
+        }
+        Repo.device(doc.id).update(
+            mapOf(
+                "unlinked" to false,
+                "model" to "${Build.MANUFACTURER} ${Build.MODEL}",
+                "sdk" to Build.VERSION.SDK_INT,
+                "appVersion" to BuildConfig.VERSION_NAME,
+                "lastSeen" to FieldValue.serverTimestamp(),
+                "status" to GuardService.statusMap(this),
+            )
+        ).await()
 
         val prefs = Prefs(this)
-        prefs.deviceId = id
-        prefs.deviceName = name
+        prefs.deviceId = doc.id
+        prefs.deviceName = doc.getString("name") ?: email
         prefs.configured = true
         withContext(Dispatchers.Default) { Dpm.bootstrap(this@MainActivity) }
         GuardService.start(this)

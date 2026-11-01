@@ -4,24 +4,10 @@ service cloud.firestore {
 
     function signedIn() { return request.auth != null; }
 
-    function pairing(code) {
-      return get(/databases/$(database)/documents/pairings/$(code)).data;
-    }
-
-    // Parent (ownerUid) or the paired child device itself (deviceUid)
+    // The parent (ownerUid) or the child device's own account (deviceUid)
     function canAccess(deviceId) {
       let d = get(/databases/$(database)/documents/devices/$(deviceId)).data;
       return signedIn() && (d.ownerUid == request.auth.uid || d.get('deviceUid', '') == request.auth.uid);
-    }
-
-    // One-time 6-digit codes created by the parent to link a child device
-    match /pairings/{code} {
-      allow get: if signedIn();
-      allow list: if signedIn() && resource.data.ownerUid == request.auth.uid;
-      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
-      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
-      allow update: if signedIn() && resource.data.used == false
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['used', 'deviceId']);
     }
 
     match /devices/{deviceId} {
@@ -29,16 +15,8 @@ service cloud.firestore {
       function isDevice() { return signedIn() && resource.data.get('deviceUid', '') == request.auth.uid; }
 
       allow read: if isOwner() || isDevice();
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
       allow delete: if isOwner();
-
-      // The parent creates it directly, or a child device creates it with a valid pairing code
-      allow create: if signedIn() && (
-        request.resource.data.ownerUid == request.auth.uid ||
-        (request.resource.data.deviceUid == request.auth.uid
-          && pairing(request.resource.data.pairCode).ownerUid == request.resource.data.ownerUid
-          && pairing(request.resource.data.pairCode).used == false
-          && pairing(request.resource.data.pairCode).expiresAt > request.time)
-      );
 
       // The parent can change anything except the owner; the child device can only report its status
       allow update: if (isOwner() && request.resource.data.ownerUid == resource.data.ownerUid)
