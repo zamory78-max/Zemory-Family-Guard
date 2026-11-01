@@ -159,37 +159,56 @@ class GuardService : Service() {
         }
     }
 
+    /**
+     * Every minute: enforce rules and keep protection alive.
+     * Firebase writes are kept low (~300/day): status every 15 min or immediately when protection
+     * changes (so the parent is alerted), apps/usage every 15 min, web history every 10 min.
+     */
     private fun loop() {
         val ctx = this
         scope.launch {
             var tick = 0
+            var lastStatus: Map<String, Any>? = null
             while (isActive) {
                 runCatching { Enforcer.apply(ctx) }.onFailure { Log.w(TAG, "enforce", it) }
                 runCatching { Dpm.ensureAccessibility(ctx) }
-                if (tick % 10 == 0 && Guard.policy.needsVpn && !Guard.vpnRunning) {
+                if (Guard.policy.needsVpn && !Guard.vpnRunning) {
                     runCatching { Dpm.applyVpn(ctx, Guard.policy) }
                 }
-                if (tick % 2 == 0) runCatching { WebLog.flush(ctx) }.onFailure { Log.w(TAG, "web", it) }
-                if (tick % 5 == 0) runCatching { uploadState(false) }.onFailure { Log.w(TAG, "upload", it) }
+                val status = statusMap(ctx)
+                val changed = lastStatus != null && status != lastStatus
+                if (tick % 15 == 0) {
+                    runCatching { uploadState(false) }.onFailure { Log.w(TAG, "upload", it) }
+                } else if (changed) {
+                    runCatching { heartbeat(status) }.onFailure { Log.w(TAG, "heartbeat", it) }
+                }
+                lastStatus = status
+                if (tick % 10 == 5) runCatching { WebLog.flush(ctx) }.onFailure { Log.w(TAG, "web", it) }
                 tick++
                 delay(60_000L)
             }
         }
     }
 
-    private fun uploadState(force: Boolean) {
+    private fun heartbeat(status: Map<String, Any> = statusMap(this)) {
         val id = Prefs(this).deviceId ?: return
         if (FirebaseAuth.getInstance().currentUser == null) return
-        val ref = Repo.device(id)
-        ref.update(
+        Repo.device(id).update(
             mapOf(
                 "lastSeen" to FieldValue.serverTimestamp(),
-                "status" to statusMap(this),
+                "status" to status,
                 "appVersion" to BuildConfig.VERSION_NAME,
                 "model" to "${Build.MANUFACTURER} ${Build.MODEL}",
                 "sdk" to Build.VERSION.SDK_INT,
             )
         )
+    }
+
+    private fun uploadState(force: Boolean) {
+        val id = Prefs(this).deviceId ?: return
+        if (FirebaseAuth.getInstance().currentUser == null) return
+        val ref = Repo.device(id)
+        heartbeat()
 
         val usage = Guard.usageToday
         val apps = HashMap<String, Any>()
@@ -206,7 +225,7 @@ class GuardService : Service() {
         }
         val hash = apps.hashCode()
         val now = System.currentTimeMillis()
-        if (force || hash != lastAppsHash || now - lastAppsUpload > 30 * 60_000L) {
+        if (force || hash != lastAppsHash || now - lastAppsUpload > 60 * 60_000L) {
             lastAppsHash = hash
             lastAppsUpload = now
             ref.collection("meta").document("apps").set(
@@ -238,6 +257,9 @@ class GuardService : Service() {
             "usageAccess" to Dpm.hasUsageAccess(ctx),
             "writeSecure" to Dpm.hasWriteSecure(ctx),
             "vpn" to Guard.vpnRunning,
+            "vpnNeeded" to Guard.policy.needsVpn,
+            "admin" to Dpm.isAdminActive(ctx),
+            "battery" to Dpm.isIgnoringBattery(ctx),
             "paused" to Guard.isPaused(ctx),
         )
     }

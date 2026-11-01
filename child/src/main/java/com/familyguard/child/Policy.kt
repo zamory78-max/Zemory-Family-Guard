@@ -83,6 +83,7 @@ data class Policy(
                 "no_install_unknown_sources" to true,
                 "no_config_date_time" to true,
                 "no_control_apps" to true,
+                "lock_settings" to true,
             ),
             "web" to mapOf(
                 "filter" to false,

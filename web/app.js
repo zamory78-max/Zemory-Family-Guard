@@ -6,7 +6,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
   getFirestore, collection, query, where, orderBy, limit, onSnapshot, doc, updateDoc, addDoc,
-  deleteDoc, serverTimestamp, arrayUnion, arrayRemove, deleteField, FieldPath,
+  deleteDoc, serverTimestamp, arrayUnion, arrayRemove, deleteField, FieldPath, setDoc, getDoc, Timestamp,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const $app = document.getElementById("app");
@@ -201,6 +201,20 @@ function openDevice(id) {
   listenWeb();
   renderDevice();
   window.scrollTo(0, 0);
+  autoSync(id);
+}
+
+// Ask the device for fresh data when the parent opens it (throttled to save Firebase quota)
+function autoSync(id) {
+  const d = S.devices.get(id);
+  if (!d || !isOnline(d)) return;
+  const key = "fg_sync_" + id;
+  let last = 0;
+  try { last = Number(localStorage.getItem(key) || 0); } catch (_) {}
+  if (Date.now() - last < 5 * 60 * 1000 || Date.now() - tsMs(d.lastSeen) < 2 * 60 * 1000) return;
+  try { localStorage.setItem(key, String(Date.now())); } catch (_) {}
+  addDoc(collection(db, "devices", id, "commands"), { type: "sync", status: "pending", createdAt: serverTimestamp(), auto: true })
+    .catch((e) => console.warn("sync", e));
 }
 
 function listenWeb() {
@@ -219,30 +233,43 @@ function stopDetail() {
 }
 
 // ---------- devices list ----------
-function deviceWarnings(d) {
+const OFFLINE_ALERT_MS = 40 * 60 * 1000; // device reports every 15 min
+
+// Problems the parent must know about: [text, severity]
+function deviceIssues(d) {
   const st = d.status || {};
-  const w = [];
-  if (!st.deviceOwner) w.push("ليس مالك الجهاز");
-  if (!st.usageAccess) w.push("بدون بيانات الاستخدام");
-  if (!st.accessibility) w.push("إمكانية الوصول معطلة");
-  if (st.paused) w.push("متوقف مؤقتاً");
-  return w;
+  const out = [];
+  const seen = tsMs(d.lastSeen);
+  if (seen && Date.now() - seen > OFFLINE_ALERT_MS) out.push([`انقطع ${ago(seen)}`, "danger"]);
+  if (st.accessibility === false) out.push(["إمكانية الوصول معطّلة", "danger"]);
+  if (st.usageAccess === false) out.push(["بيانات الاستخدام معطّلة", "danger"]);
+  if (st.vpnNeeded && st.vpn === false) out.push(["فلتر المواقع متوقف", "danger"]);
+  if (!st.deviceOwner && st.admin === false) out.push(["الحماية من الحذف غير مفعّلة", "warn"]);
+  if (st.battery === false) out.push(["قد يوقفه توفير البطارية", "warn"]);
+  if (!(d.policy && d.policy.pinHash)) out.push(["لم يُعيَّن رمز الوالد", "warn"]);
+  if (st.paused) out.push(["متوقف مؤقتاً", "warn"]);
+  return out;
 }
+const deviceWarnings = (d) => deviceIssues(d).map(([t]) => t);
+const issueBadges = (d) => deviceIssues(d).map(([t, c]) => `<span class="badge ${c}">${esc(t)}</span>`).join("");
+const modeBadge = (d) => (d.status && d.status.deviceOwner)
+  ? `<span class="badge ok">حماية كاملة</span>` : `<span class="badge">حماية عادية</span>`;
 
 function renderDevices() {
   const list = [...S.devices.values()].sort((a, b) => (a.name || "").localeCompare(b.name || "", "ar"));
+  const alerts = list.filter((d) => deviceIssues(d).some(([, c]) => c === "danger"));
   $app.innerHTML = `
   <h1>أجهزتي</h1>
+  ${alerts.length ? `<div class="alert">⚠️ ${alerts.length === 1 ? "جهاز يحتاج" : alerts.length + " أجهزة تحتاج"} انتباهك: ${alerts.map((d) => esc(d.name || "جهاز")).join("، ")}</div>` : ""}
   <div class="grid">
     ${list.map((d) => {
       const on = isOnline(d);
-      const w = deviceWarnings(d);
       return `<div class="card device-card" data-open="${esc(d.id)}">
         <div class="row"><span class="icon">${typeIcon(d.type)}</span><span class="spacer"></span>
           <span class="badge ${on ? "ok" : ""}"><span class="dot"></span>${on ? "متصل" : "غير متصل"}</span></div>
         <b>${esc(d.name || "جهاز")}</b>
         <span class="muted small">${esc(d.model || "")} · ${esc(ago(tsMs(d.lastSeen)))}</span>
-        ${w.length ? `<div class="row">${w.map((x) => `<span class="badge warn">${esc(x)}</span>`).join("")}</div>` : ""}
+        <div class="row">${modeBadge(d)}${issueBadges(d)}</div>
       </div>`;
     }).join("")}
     <div class="card device-card add" id="addDevice"><span style="font-size:28px">＋</span><span>إضافة جهاز</span></div>
@@ -251,27 +278,69 @@ function renderDevices() {
   document.getElementById("addDevice").onclick = showAddDevice;
 }
 
-function showAddDevice() {
+// ---------- pairing ----------
+let pairingUnsub = null;
+let pairingTimer = null;
+function stopPairing() {
+  if (pairingUnsub) { pairingUnsub(); pairingUnsub = null; }
+  if (pairingTimer) { clearInterval(pairingTimer); pairingTimer = null; }
+}
+
+async function createPairingCode() {
+  for (let i = 0; i < 5; i++) {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const ref = doc(db, "pairings", code);
+    const existing = await getDoc(ref).catch(() => null);
+    if (existing && existing.exists()) continue;
+    const expiresAt = Timestamp.fromMillis(Date.now() + 15 * 60 * 1000);
+    await setDoc(ref, { ownerUid: S.user.uid, used: false, createdAt: serverTimestamp(), expiresAt });
+    return { code, expiresAt: expiresAt.toMillis() };
+  }
+  throw new Error("تعذّر إنشاء رمز، حاول مجدداً");
+}
+
+async function showAddDevice() {
+  stopPairing();
   const apk = childApkUrl();
+  openModal(`<h2>إضافة جهاز</h2><div class="empty">جارٍ إنشاء رمز الربط…</div>`);
+  let p;
+  try { p = await createPairingCode(); }
+  catch (e) { console.error(e); openModal(`<h2>إضافة جهاز</h2><p class="notice">تعذّر إنشاء الرمز: ${esc(e.code || e.message)}</p><div class="row"><span class="spacer"></span><button class="btn" data-close>إغلاق</button></div>`); return; }
+
   openModal(`
     <h2>إضافة جهاز (هاتف، تابلت أو تلفاز أندرويد)</h2>
     <ol class="small" style="padding-inline-start:18px;margin:0">
-      <li>نزّل تطبيق الجهاز <b>FamilyGuard-Child.apk</b> ${apk ? `من <a href="${esc(apk)}" target="_blank" rel="noopener">هذا الرابط</a>` : "من صفحة Releases في مستودع GitHub"}.</li>
-      <li>على الجهاز: احذف حسابات Google مؤقتاً (الإعدادات ← الحسابات)، وفعّل خيارات المطوّر و«تصحيح USB».</li>
-      <li>صِل الجهاز بالكمبيوتر وشغّل سكربت <span class="mono">scripts/setup-device</span> من المستودع، أو الأوامر التالية:</li>
+      <li>ثبّت تطبيق <b>Zemory Family Guard</b> (FamilyGuard-Child.apk) على جهاز الطفل${apk ? ` — <a href="${esc(apk)}" target="_blank" rel="noopener">رابط التنزيل</a>` : ""}.</li>
+      <li>افتحه واكتب رمز الربط:</li>
     </ol>
-    <pre class="code">adb install -r FamilyGuard-Child.apk
-adb shell dpm set-device-owner com.familyguard.child/.admin.AdminReceiver
-adb shell pm grant com.familyguard.child android.permission.WRITE_SECURE_SETTINGS
-adb shell appops set com.familyguard.child GET_USAGE_STATS allow
-adb shell settings put secure enabled_accessibility_services com.familyguard.child/com.familyguard.child.enforce.GuardAccessibilityService
-adb shell settings put secure accessibility_enabled 1</pre>
-    <ol class="small" start="4" style="padding-inline-start:18px;margin:0">
-      <li>افتح التطبيق على الجهاز وسجّل الدخول بنفس حسابك (<span class="mono">${esc(S.user.email)}</span>) وأعطه اسماً.</li>
-      <li>أعد إضافة حسابات Google. سيظهر الجهاز هنا خلال ثوانٍ.</li>
+    <div class="pair-code mono">${p.code.slice(0, 3)} ${p.code.slice(3)}</div>
+    <p class="small muted" style="text-align:center;margin:0" id="pairLeft"></p>
+    <ol class="small" start="3" style="padding-inline-start:18px;margin:0">
+      <li>اتبع خطوات الإعداد التي تظهر على جهاز الطفل حتى تظهر «✅ الحماية مكتملة».</li>
+      <li>ثم عيّن <b>رمز الوالد</b> من صفحة الجهاز ← القيود والإعدادات.</li>
     </ol>
-    <p class="small muted">للتلفاز: فعّل «تصحيح الأخطاء عبر الشبكة» واستخدم <span class="mono">adb connect IP-التلفاز</span> قبل الأوامر.</p>
-    <div class="row"><span class="spacer"></span><button class="btn primary" data-close>تم</button></div>`);
+    <div class="row"><span class="spacer"></span><button class="btn" data-close>إغلاق</button></div>`);
+
+  const left = () => {
+    const el = document.getElementById("pairLeft");
+    if (!el) { stopPairing(); return; }
+    const ms = p.expiresAt - Date.now();
+    if (ms <= 0) { el.textContent = "انتهت صلاحية الرمز — أغلق وافتح «إضافة جهاز» من جديد"; stopPairing(); return; }
+    const m = Math.floor(ms / 60000), sec = Math.floor((ms % 60000) / 1000);
+    el.textContent = `صالح لمدة ${m}:${String(sec).padStart(2, "0")} — بانتظار الجهاز…`;
+  };
+  left();
+  pairingTimer = setInterval(left, 1000);
+  pairingUnsub = onSnapshot(doc(db, "pairings", p.code), (snap) => {
+    const v = snap.data();
+    if (v && v.used && v.deviceId) {
+      stopPairing();
+      closeModal();
+      toast("تم ربط الجهاز ✅");
+      deleteDoc(doc(db, "pairings", p.code)).catch(() => {});
+      setTimeout(() => { if (S.devices.has(v.deviceId)) openDevice(v.deviceId); }, 800);
+    }
+  });
 }
 
 // ---------- device detail ----------
@@ -287,7 +356,6 @@ function renderDevice() {
   const d = dev();
   if (!d) return renderDevices();
   const on = isOnline(d);
-  const w = deviceWarnings(d);
   // keep focus/caret of the search box across re-renders
   const active = document.activeElement;
   const keepSearch = active && active.id === "search";
@@ -301,7 +369,7 @@ function renderDevice() {
   </div>
   <h1 style="margin-top:12px">${typeIcon(d.type)} ${esc(d.name || "جهاز")}</h1>
   <div class="row small muted">${esc(d.model || "")} · Android SDK ${esc(d.sdk ?? "?")} · التطبيق ${esc(d.appVersion || "?")}</div>
-  ${w.length ? `<div class="row" style="margin-top:8px">${w.map((x) => `<span class="badge warn">${esc(x)}</span>`).join("")}</div>` : ""}
+  <div class="row" style="margin-top:8px">${modeBadge(d)}${issueBadges(d)}</div>
   <nav class="tabs">${TABS.map(([k, t]) => `<button class="tab ${S.tab === k ? "active" : ""}" data-tab="${k}">${t}</button>`).join("")}</nav>
   <section id="tabBody"></section>`;
   document.getElementById("back").onclick = () => { stopDetail(); S.deviceId = null; renderDevices(); };

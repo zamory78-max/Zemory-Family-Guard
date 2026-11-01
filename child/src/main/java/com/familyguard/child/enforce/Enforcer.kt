@@ -112,6 +112,7 @@ object Enforcer {
 
     fun isPinLocked(pkg: String): Boolean {
         val p = Guard.policy
+        if (p.pinHash.isEmpty()) return false
         if (pkg in p.pinLocked) return true
         return p.restrictions["lock_settings"] == true && pkg in SETTINGS_PKGS
     }

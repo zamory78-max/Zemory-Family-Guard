@@ -183,6 +183,14 @@ object Dpm {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
+    fun isAdminActive(ctx: Context): Boolean =
+        runCatching { dpm(ctx).isAdminActive(admin(ctx)) }.getOrDefault(false)
+
+    fun isIgnoringBattery(ctx: Context): Boolean {
+        val pm = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        return pm.isIgnoringBatteryOptimizations(ctx.packageName)
+    }
+
     fun hasWriteSecure(ctx: Context) =
         ctx.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
 

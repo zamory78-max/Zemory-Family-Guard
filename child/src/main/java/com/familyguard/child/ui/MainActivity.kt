@@ -1,6 +1,11 @@
 package com.familyguard.child.ui
 
+import android.Manifest
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -23,7 +28,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -42,7 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.familyguard.child.BuildConfig
@@ -54,7 +62,7 @@ import com.familyguard.child.sync.GuardService
 import com.familyguard.child.sync.Repo
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.SetOptions
+import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -68,6 +76,9 @@ class MainActivity : ComponentActivity() {
 
     private val vpnConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         Dpm.applyVpn(this, Guard.policy)
+        refresh++
+    }
+    private val askPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         refresh++
     }
 
@@ -97,18 +108,20 @@ class MainActivity : ComponentActivity() {
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Column(Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
-                    Text("🛡️ Zemory Family Guard", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                    Text("الإصدار ${BuildConfig.VERSION_NAME}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("🛡️ Zemory Family Guard", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text("الإصدار ${BuildConfig.VERSION_NAME}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                     Spacer(Modifier.height(16.dp))
                     when {
-                        !configured -> Setup { configured = true }
+                        !configured -> Pairing { configured = true }
                         Guard.policy.pinHash.isNotEmpty() && !unlocked -> PinGate()
-                        else -> Status { configured = false }
+                        else -> Wizard { configured = false }
                     }
                 }
             }
         }
     }
+
+    // ---------------- PIN ----------------
 
     @Composable
     private fun PinGate() {
@@ -122,38 +135,35 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ---------------- Pairing ----------------
+
     @Composable
-    private fun Setup(onDone: () -> Unit) {
+    private fun Pairing(onDone: () -> Unit) {
         val scope = rememberCoroutineScope()
-        var email by remember { mutableStateOf("") }
-        var password by remember { mutableStateOf("") }
-        var name by remember { mutableStateOf(Build.MODEL ?: "") }
+        var code by remember { mutableStateOf("") }
+        var name by remember { mutableStateOf("") }
         val isTv = remember { packageManager.hasSystemFeature("android.software.leanback") }
         var type by remember { mutableStateOf(if (isTv) "tv" else "phone") }
         var busy by remember { mutableStateOf(false) }
         var err by remember { mutableStateOf<String?>(null) }
 
-        Text("ربط هذا الجهاز بحساب الوالد", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text("ربط هذا الجهاز", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
         Text(
-            "استخدم نفس البريد وكلمة المرور التي أنشأتها في لوحة التحكم.",
+            "في تطبيق الوالد اضغط «إضافة جهاز»، وسيظهر لك رمز من 6 أرقام. اكتبه هنا.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
         OutlinedTextField(
-            email, { email = it.trim() }, label = { Text("البريد الإلكتروني") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+            code, { v -> code = v.filter { it.isDigit() }.take(6) },
+            label = { Text("رمز الربط") }, singleLine = true,
+            textStyle = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
-            password, { password = it }, label = { Text("كلمة المرور") }, singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            name, { name = it }, label = { Text("اسم الجهاز (مثلاً: هاتف أحمد)") }, singleLine = true,
+            name, { name = it.take(40) }, label = { Text("اسم الجهاز (مثلاً: هاتف أحمد)") }, singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(8.dp))
@@ -166,48 +176,74 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(8.dp))
             Text(it, color = MaterialTheme.colorScheme.error)
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
         Button(
-            enabled = !busy && email.isNotBlank() && password.isNotBlank() && name.isNotBlank(),
+            enabled = !busy && code.length == 6 && name.isNotBlank(),
             onClick = {
                 busy = true
                 err = null
                 scope.launch {
                     try {
-                        link(email, password, name.trim(), type)
+                        pair(code, name.trim(), type)
                         onDone()
                     } catch (e: Exception) {
-                        err = "تعذّر الربط: ${e.localizedMessage}"
+                        err = friendlyError(e)
                     }
                     busy = false
                 }
             },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(if (busy) "جارٍ الربط..." else "ربط الجهاز") }
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) { Text(if (busy) "جارٍ الربط..." else "ربط الجهاز", fontSize = 17.sp) }
     }
 
-    private suspend fun link(email: String, password: String, name: String, type: String) {
-        val auth = FirebaseAuth.getInstance()
-        val uid = auth.signInWithEmailAndPassword(email, password).await().user?.uid
-            ?: error("فشل تسجيل الدخول")
-        val prefs = Prefs(this)
-        val id = prefs.deviceId ?: UUID.randomUUID().toString().replace("-", "").take(20)
-        val ref = Repo.device(id)
-        val existing = runCatching { ref.get().await() }.getOrNull()
-        val data = HashMap<String, Any>()
-        data["ownerUid"] = uid
-        data["name"] = name
-        data["type"] = type
-        data["model"] = "${Build.MANUFACTURER} ${Build.MODEL}"
-        data["sdk"] = Build.VERSION.SDK_INT
-        data["appVersion"] = BuildConfig.VERSION_NAME
-        data["lastSeen"] = FieldValue.serverTimestamp()
-        data["status"] = GuardService.statusMap(this)
-        if (existing == null || !existing.exists()) {
-            data["createdAt"] = FieldValue.serverTimestamp()
-            data["policy"] = Policy.defaultMap()
+    private fun friendlyError(e: Exception): String {
+        val msg = e.message.orEmpty()
+        return when {
+            e is PairingException -> e.message ?: "تعذّر الربط"
+            e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+                "الرمز غير صحيح أو انتهت صلاحيته. أنشئ رمزاً جديداً من تطبيق الوالد."
+            msg.contains("ADMIN_ONLY_OPERATION") || msg.contains("OPERATION_NOT_ALLOWED") ->
+                "تسجيل الدخول المجهول غير مفعّل في Firebase (Authentication ← Anonymous)."
+            msg.contains("network", ignoreCase = true) || msg.contains("UNAVAILABLE") ->
+                "لا يوجد اتصال بالإنترنت. تأكد من الشبكة وأعد المحاولة."
+            else -> "تعذّر الربط: $msg"
         }
-        ref.set(data, SetOptions.merge()).await()
+    }
+
+    private class PairingException(message: String) : Exception(message)
+
+    private suspend fun pair(code: String, name: String, type: String) {
+        val auth = FirebaseAuth.getInstance()
+        val uid = (auth.currentUser ?: auth.signInAnonymously().await().user)?.uid
+            ?: throw PairingException("فشل تسجيل الدخول")
+
+        val pairRef = Repo.db.collection("pairings").document(code)
+        val pairing = pairRef.get().await()
+        if (!pairing.exists()) throw PairingException("الرمز غير صحيح. تأكد من الأرقام.")
+        if (pairing.getBoolean("used") == true) throw PairingException("هذا الرمز استُعمل من قبل. أنشئ رمزاً جديداً.")
+        val expires = pairing.getTimestamp("expiresAt")?.toDate()?.time ?: 0L
+        if (expires < System.currentTimeMillis()) throw PairingException("انتهت صلاحية الرمز. أنشئ رمزاً جديداً.")
+        val owner = pairing.getString("ownerUid") ?: throw PairingException("رمز غير صالح")
+
+        val id = UUID.randomUUID().toString().replace("-", "").take(20)
+        val data = hashMapOf<String, Any>(
+            "ownerUid" to owner,
+            "deviceUid" to uid,
+            "pairCode" to code,
+            "name" to name,
+            "type" to type,
+            "model" to "${Build.MANUFACTURER} ${Build.MODEL}",
+            "sdk" to Build.VERSION.SDK_INT,
+            "appVersion" to BuildConfig.VERSION_NAME,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "lastSeen" to FieldValue.serverTimestamp(),
+            "status" to GuardService.statusMap(this),
+            "policy" to Policy.defaultMap(),
+        )
+        Repo.device(id).set(data).await()
+        pairRef.update(mapOf("used" to true, "deviceId" to id)).await()
+
+        val prefs = Prefs(this)
         prefs.deviceId = id
         prefs.deviceName = name
         prefs.configured = true
@@ -215,57 +251,201 @@ class MainActivity : ComponentActivity() {
         GuardService.start(this)
     }
 
+    // ---------------- Setup wizard / status ----------------
+
+    private class Step(
+        val title: String,
+        val hint: String,
+        val done: Boolean,
+        val action: String?,
+        val extra: (@Composable () -> Unit)?,
+        val onAction: (() -> Unit)?,
+    )
+
+    private fun openSafely(vararg intents: Intent) {
+        for (i in intents) {
+            try {
+                startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun appDetails() = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+
+    private fun autostartIntents(): Array<Intent> {
+        val m = Build.MANUFACTURER.lowercase()
+        val list = ArrayList<Intent>()
+        fun comp(p: String, c: String) = Intent().setComponent(ComponentName(p, c))
+        when {
+            m.contains("xiaomi") || m.contains("redmi") || m.contains("poco") ->
+                list += comp("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
+            m.contains("oppo") || m.contains("realme") || m.contains("oneplus") -> {
+                list += comp("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity")
+                list += comp("com.oplus.safecenter", "com.oplus.safecenter.permission.startup.StartupAppListActivity")
+            }
+            m.contains("vivo") ->
+                list += comp("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")
+            m.contains("huawei") || m.contains("honor") ->
+                list += comp("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity")
+        }
+        list += appDetails()
+        return list.toTypedArray()
+    }
+
+    private fun needsAutostartStep(): Boolean {
+        val m = Build.MANUFACTURER.lowercase()
+        return listOf("xiaomi", "redmi", "poco", "oppo", "realme", "oneplus", "vivo", "huawei", "honor", "infinix", "tecno", "itel")
+            .any { m.contains(it) }
+    }
+
+    private fun buildSteps(prefs: Prefs): List<Step> {
+        val owner = Dpm.isOwner(this)
+        val steps = ArrayList<Step>()
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            val ok = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            steps += Step("الإشعارات", "لإظهار أن الحماية تعمل", ok, "سماح", null) {
+                askPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
+        steps += Step(
+            "الوصول لبيانات الاستخدام",
+            "اختر Zemory Family Guard من القائمة وفعّل «السماح».",
+            Dpm.hasUsageAccess(this), "فتح", null,
+        ) {
+            openSafely(
+                Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:$packageName")),
+                Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS),
+            )
+        }
+
+        val accOn = Dpm.isAccessibilityOn(this)
+        val accExtra: (@Composable () -> Unit)? =
+            if (!accOn && !owner && Build.VERSION.SDK_INT >= 33) {
+                {
+                    Text(
+                        "إذا كان الخيار رمادياً أو ظهرت رسالة «إعداد مقيّد»: اضغط «معلومات التطبيق»، ثم ⋮ في الأعلى، ثم «السماح بالإعدادات المقيّدة»، ثم ارجع هنا.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.error,
+                    )
+                    TextButton(onClick = { openSafely(appDetails()) }) { Text("معلومات التطبيق") }
+                }
+            } else null
+        steps += Step(
+            "خدمة إمكانية الوصول",
+            "افتح «التطبيقات المثبّتة» أو «الخدمات المنزّلة»، ثم Zemory Family Guard، وفعّلها.",
+            accOn, "فتح", accExtra,
+        ) { openSafely(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+
+        if (!owner) {
+            steps += Step(
+                "حماية من الحذف",
+                "تفعيل «مسؤول الجهاز» يمنع حذف التطبيق قبل إلغاء الحماية.",
+                Dpm.isAdminActive(this), "تفعيل", null,
+            ) {
+                openSafely(
+                    Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+                        .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, Dpm.admin(this))
+                        .putExtra(
+                            DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                            "يمنع حذف Zemory Family Guard من جهاز الطفل دون علم الوالد.",
+                        )
+                )
+            }
+        }
+
+        if (Guard.policy.needsVpn) {
+            val vpnOk = VpnService.prepare(this) == null
+            steps += Step(
+                "فلتر المواقع",
+                "اضغط «موافق» في رسالة طلب الاتصال (VPN محلي لتسجيل وحظر المواقع).",
+                vpnOk && Guard.vpnRunning, "سماح", null,
+            ) {
+                val i = VpnService.prepare(this)
+                if (i != null) vpnConsent.launch(i) else {
+                    Dpm.applyVpn(this, Guard.policy); refresh++
+                }
+            }
+        }
+
+        steps += Step(
+            "العمل في الخلفية",
+            "اختر «السماح» حتى لا يوقف النظام الحماية لتوفير البطارية.",
+            Dpm.isIgnoringBattery(this), "سماح", null,
+        ) {
+            openSafely(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
+                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+            )
+        }
+
+        if (!owner && needsAutostartStep()) {
+            val autoExtra: (@Composable () -> Unit)? = if (!prefs.autostartDone) {
+                { TextButton(onClick = { prefs.autostartDone = true; refresh++ }) { Text("تم ✓") } }
+            } else null
+            steps += Step(
+                "التشغيل التلقائي",
+                "فعّل «التشغيل التلقائي» لـ Zemory Family Guard، ثم ارجع واضغط «تم».",
+                prefs.autostartDone, "فتح", autoExtra,
+            ) { openSafely(*autostartIntents()) }
+        }
+
+        steps += Step(
+            "رمز الوالد",
+            "عيّنه من تطبيق الوالد ← الجهاز ← القيود والإعدادات. بعدها يُقفل هذا التطبيق والإعدادات برمزك.",
+            Guard.policy.pinHash.isNotEmpty(), null, null, null,
+        )
+        return steps
+    }
+
     @Composable
-    private fun Status(onUnlinked: () -> Unit) {
+    private fun Wizard(onUnlinked: () -> Unit) {
         val tick = refresh // re-read status when this changes
         if (tick < 0) return
         val prefs = remember { Prefs(this) }
         val owner = Dpm.isOwner(this)
-        val usage = Dpm.hasUsageAccess(this)
-        val acc = Dpm.isAccessibilityOn(this)
-        val ws = Dpm.hasWriteSecure(this)
-        val vpnOk = VpnService.prepare(this) == null
+        val steps = buildSteps(prefs)
+        val done = steps.count { it.done }
         val paused = Guard.isPaused(this)
         var confirmUnlink by remember { mutableStateOf(false) }
+        var showAdvanced by remember { mutableStateOf(false) }
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text(prefs.deviceName, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Text("معرّف الجهاز: ${prefs.deviceId}", fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                Text(
+                    if (owner) "حماية كاملة (مالك الجهاز)" else "حماية عادية",
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.primary,
+                )
                 if (paused) Text("⏸ الحماية متوقفة مؤقتاً", color = MaterialTheme.colorScheme.error)
             }
         }
-        Spacer(Modifier.height(12.dp))
-        Text("حالة الصلاحيات", fontWeight = FontWeight.Bold)
-        Check("مالك الجهاز (Device Owner)", owner, "يُفعَّل بأمر adb من الكمبيوتر — راجع README", null)
-        Check("الوصول لبيانات الاستخدام", usage, "مطلوب لحساب وقت كل تطبيق") {
-            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-        }
-        Check("خدمة إمكانية الوصول", acc, "مطلوبة لقفل التطبيقات برمز وتسجيل المواقع") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
-        Check("إعادة التفعيل التلقائي (WRITE_SECURE_SETTINGS)", ws, "تمنح بأمر adb — راجع README", null)
-        Check("فلتر المواقع (VPN)", vpnOk && (Guard.vpnRunning || !Guard.policy.needsVpn), "اضغط للسماح") {
-            val i = VpnService.prepare(this)
-            if (i != null) vpnConsent.launch(i) else {
-                Dpm.applyVpn(this, Guard.policy); refresh++
-            }
-        }
         Spacer(Modifier.height(16.dp))
-        Text("أوامر الإعداد من الكمبيوتر (مرة واحدة):", fontWeight = FontWeight.Bold)
-        Text(
-            ADB_COMMANDS,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 11.sp,
-            modifier = Modifier.padding(vertical = 6.dp),
-        )
+
+        if (done == steps.size) {
+            Text("✅ الحماية مكتملة", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            Text("يمكنك إغلاق هذه الشاشة. سيظهر الجهاز في تطبيق الوالد.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            Text("خطوات الإعداد ($done من ${steps.size})", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            LinearProgressIndicator(
+                progress = { done.toFloat() / steps.size },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         Spacer(Modifier.height(12.dp))
+
+        val firstPending = steps.indexOfFirst { !it.done }
+        steps.forEachIndexed { i, s -> StepRow(i + 1, s, highlight = i == firstPending) }
+
+        Spacer(Modifier.height(20.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (paused) {
                 Button(onClick = { prefs.pausedUntil = 0L; GuardService.start(this@MainActivity); refresh++ }) {
                     Text("استئناف الحماية")
                 }
-            } else {
+            } else if (Guard.policy.pinHash.isNotEmpty()) {
                 OutlinedButton(onClick = {
                     prefs.pausedUntil = System.currentTimeMillis() + 30 * 60_000L
                     Thread { runCatching { com.familyguard.child.enforce.Enforcer.apply(applicationContext) } }.start()
@@ -275,11 +455,23 @@ class MainActivity : ComponentActivity() {
             TextButton(onClick = { confirmUnlink = true }) { Text("إزالة الحماية") }
         }
 
+        Spacer(Modifier.height(8.dp))
+        TextButton(onClick = { showAdvanced = !showAdvanced }) {
+            Text(if (showAdvanced) "إخفاء الإعداد المتقدم" else "إعداد متقدم: حماية كاملة عبر الكمبيوتر")
+        }
+        if (showAdvanced) {
+            Text(
+                "على جهاز بدون حسابات، مع تفعيل تصحيح USB، شغّل من الكمبيوتر:",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(ADB_COMMANDS, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.padding(vertical = 6.dp))
+        }
+
         if (confirmUnlink) {
             AlertDialog(
                 onDismissRequest = { confirmUnlink = false },
                 title = { Text("إزالة الحماية؟") },
-                text = { Text("سيتم رفع كل القيود وإلغاء وضع مالك الجهاز وفك ربط هذا الجهاز. بعدها يمكن حذف التطبيق.") },
+                text = { Text("سيتم رفع كل القيود وفك ربط هذا الجهاز وإبلاغ الوالد. بعدها يمكن حذف التطبيق.") },
                 confirmButton = {
                     TextButton(onClick = {
                         confirmUnlink = false
@@ -292,28 +484,37 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @Composable
+    private fun StepRow(n: Int, s: Step, highlight: Boolean) {
+        val colors = if (highlight) {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        } else CardDefaults.cardColors()
+        Card(Modifier.fillMaxWidth().padding(vertical = 4.dp), colors = colors) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (s.done) "✅" else "$n", fontSize = 18.sp, modifier = Modifier.widthIn(min = 28.dp))
+                Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+                    Text(s.title, fontWeight = FontWeight.SemiBold)
+                    if (!s.done) {
+                        Text(s.hint, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        s.extra?.invoke()
+                    }
+                }
+                if (!s.done && s.action != null && s.onAction != null) {
+                    if (highlight) Button(onClick = s.onAction) { Text(s.action) }
+                    else FilledTonalButton(onClick = s.onAction) { Text(s.action) }
+                }
+            }
+        }
+    }
+
     private fun unlink() {
         val prefs = Prefs(this)
         prefs.deviceId?.let { id -> runCatching { Repo.device(id).update("unlinked", true) } }
         GuardService.stop(this)
         Dpm.teardown(this)
+        runCatching { Dpm.dpm(this).removeActiveAdmin(Dpm.admin(this)) }
         FirebaseAuth.getInstance().signOut()
         prefs.clear()
-    }
-
-    @Composable
-    private fun Check(title: String, ok: Boolean, hint: String, onFix: (() -> Unit)?) {
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(if (ok) "✅" else "⚠️", fontSize = 18.sp)
-            Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                Text(title)
-                if (!ok) Text(hint, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (!ok && onFix != null) TextButton(onClick = onFix) { Text("تفعيل") }
-        }
     }
 
     companion object {

@@ -8,4 +8,7 @@ class AdminReceiver : DeviceAdminReceiver() {
     override fun onEnabled(context: Context, intent: Intent) {
         Dpm.bootstrap(context)
     }
+
+    override fun onDisableRequested(context: Context, intent: Intent): CharSequence =
+        "إلغاء هذا الخيار يوقف حماية Zemory Family Guard وسيتم إبلاغ الوالد."
 }
