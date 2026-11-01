@@ -81,6 +81,11 @@ class MainActivity : ComponentActivity() {
         refresh++
     }
 
+    // Device admin screen only works when started "for result" (it checks the calling package)
+    private val addAdmin = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        refresh++
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Prefs(this).configured) GuardService.start(this)
@@ -327,14 +332,18 @@ class MainActivity : ComponentActivity() {
                 "تفعيل «مسؤول الجهاز» يمنع حذف التطبيق قبل إلغاء الحماية.",
                 Dpm.isAdminActive(this), "تفعيل", null,
             ) {
-                openSafely(
-                    Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
-                        .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, Dpm.admin(this))
-                        .putExtra(
-                            DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                            "يمنع حذف Zemory Family Guard من جهاز الطفل دون علم الوالد.",
-                        )
-                )
+                try {
+                    addAdmin.launch(
+                        Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+                            .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, Dpm.admin(this))
+                            .putExtra(
+                                DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                                "يمنع حذف Zemory Family Guard من جهاز الطفل دون علم الوالد.",
+                            )
+                    )
+                } catch (_: Exception) {
+                    openSafely(Intent().setComponent(ComponentName("com.android.settings", "com.android.settings.DeviceAdminSettings")))
+                }
             }
         }
 
