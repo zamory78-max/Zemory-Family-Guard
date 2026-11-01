@@ -69,7 +69,16 @@ class GuardAccessibilityService : AccessibilityService() {
             lastUrl = text
             WebLog.url(text, pkg)
             val p = Guard.policy
-            if (!Guard.isPaused(this) && !Guard.isOverridden("web:$host") && Domains.isSiteBlocked(host, p)) {
+            if (Guard.isPaused(this)) return
+            // Lock the Google/YouTube history pages (where history can be deleted) with the owner PIN
+            if (p.restrictions["lock_youtube_settings"] == true && p.pinHash.isNotEmpty() &&
+                !Guard.isUnlocked(YT_SETTINGS) && isHistoryPage(host, text)
+            ) {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                LockActivity.show(this, YT_SETTINGS, "ytsettings")
+                return
+            }
+            if (!Guard.isOverridden("web:$host") && Domains.isSiteBlocked(host, p)) {
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 LockActivity.show(this, host, "web", url = text)
             }
@@ -118,7 +127,19 @@ class GuardAccessibilityService : AccessibilityService() {
             "Historique et confidentialité", "Gérer tout l'historique", "Effacer l'historique des vidéos regardées",
             "السجلّ والخصوصية", "السجل والخصوصية", "إدارة كل السجلّ", "إدارة كل السجل",
             "محو سجلّ المشاهدة", "محو سجل المشاهدة", "محو كل سجلّ المشاهدة", "إيقاف سجلّ المشاهدة مؤقتًا",
+            // the watch-history page itself (videos can be removed one by one there)
+            "Search watch history", "Watch history", "Historique des vidéos regardées", "Rechercher dans l'historique",
+            "البحث في سجلّ المشاهدة", "البحث في سجل المشاهدة", "سجلّ المشاهدة", "سجل المشاهدة",
         )
+
+        /** Google / YouTube web pages where activity or watch history can be deleted. */
+        private val HISTORY_DOMAINS = setOf("myactivity.google.com", "myaccount.google.com", "takeout.google.com")
+
+        fun isHistoryPage(host: String, url: String): Boolean {
+            if (Domains.isBlocked(host, HISTORY_DOMAINS)) return true
+            val u = url.lowercase()
+            return host.endsWith("youtube.com") && (u.contains("/feed/history") || u.contains("/feed/you"))
+        }
 
         /** Browser package -> address bar view ids. */
         val BROWSERS: Map<String, List<String>> = mapOf(
