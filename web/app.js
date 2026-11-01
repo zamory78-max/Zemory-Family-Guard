@@ -112,6 +112,7 @@ const S = {
   commands: [],
   webDay: dayKey(),
   web: null,
+  requests: [],
   search: "",
   appFilter: "user",
   hideSystemDomains: true,
@@ -198,6 +199,13 @@ function openDevice(id) {
     query(collection(db, "devices", id, "commands"), orderBy("createdAt", "desc"), limit(20)),
     (qs) => { S.commands = qs.docs.map((d) => ({ id: d.id, ...d.data() })); if (S.tab === "commands") renderDevice(); },
   ));
+  S.requests = [];
+  S.unsubDetail.push(onSnapshot(collection(db, "devices", id, "requests"), (qs) => {
+    S.requests = qs.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .filter((x) => x.status === "pending")
+      .sort((a, b) => tsMs(b.ts) - tsMs(a.ts));
+    renderDevice();
+  }));
   listenWeb();
   renderDevice();
   window.scrollTo(0, 0);
@@ -246,7 +254,7 @@ function deviceIssues(d) {
   if (st.vpnNeeded && st.vpn === false) out.push(["فلتر المواقع متوقف", "danger"]);
   if (!st.deviceOwner && st.admin === false) out.push(["الحماية من الحذف غير مفعّلة", "warn"]);
   if (st.battery === false) out.push(["قد يوقفه توفير البطارية", "warn"]);
-  if (!(d.policy && d.policy.pinHash)) out.push(["لم يُعيَّن رمز الوالد", "warn"]);
+  if (!(d.policy && d.policy.pinHash)) out.push(["لم يُعيَّن رمز المالك", "warn"]);
   if (st.paused) out.push(["متوقف مؤقتاً", "warn"]);
   return out;
 }
@@ -354,7 +362,7 @@ function showAddDevice() {
         <pre class="code">${esc(email)}\n${esc(pass)}</pre>
         <ol class="small" start="3" style="padding-inline-start:18px;margin:0">
           <li>اتبع خطوات الإعداد على جهاز الطفل حتى «✅ الحماية مكتملة».</li>
-          <li>عيّن <b>رمز الوالد</b> من صفحة الجهاز ← القيود والإعدادات.</li>
+          <li>عيّن <b>رمز المالك</b> من صفحة الجهاز ← القيود والإعدادات.</li>
         </ol>
         <p class="small muted">احتفظ بالبريد وكلمة المرور، ستحتاجهما إذا أعدت تثبيت التطبيق على الجهاز.</p>
         <div class="row"><span class="spacer"></span><button class="btn primary" data-close>تم</button></div>`);
@@ -399,7 +407,7 @@ function renderDevice() {
   <h1 style="margin-top:12px">${typeIcon(d.type)} ${esc(d.name || "جهاز")}</h1>
   <div class="row small muted">${esc(d.model || "")} · Android SDK ${esc(d.sdk ?? "?")} · التطبيق ${esc(d.appVersion || "?")}</div>
   <div class="row" style="margin-top:8px">${modeBadge(d)}${issueBadges(d)}</div>
-  <nav class="tabs">${TABS.map(([k, t]) => `<button class="tab ${S.tab === k ? "active" : ""}" data-tab="${k}">${t}</button>`).join("")}</nav>
+  <nav class="tabs">${TABS.map(([k, t]) => `<button class="tab ${S.tab === k ? "active" : ""}" data-tab="${k}">${t}${k === "web" && S.requests.length ? ` <span class="count">${S.requests.length}</span>` : ""}</button>`).join("")}</nav>
   <section id="tabBody"></section>`;
   document.getElementById("back").onclick = () => { stopDetail(); S.deviceId = null; renderDevices(); };
   $app.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; renderDevice(); }));
@@ -487,7 +495,7 @@ function tabApps(el) {
       const v = parseInt(t.value, 10);
       run(updateDoc(devRef(), new FieldPath("policy", "limits", pkg), v > 0 ? v : deleteField()), v > 0 ? `الحد: ${mins(v)} يومياً` : "تم إلغاء الحد");
     } else if (["blocked", "pinLocked", "hidden"].includes(act)) {
-      if (act === "pinLocked" && t.checked && !pol().pinHash) toast("تنبيه: عيّن رمز الوالد من تبويب القيود");
+      if (act === "pinLocked" && t.checked && !pol().pinHash) toast("تنبيه: عيّن رمز المالك من تبويب القيود");
       run(updateDoc(devRef(), { [`policy.${act}`]: t.checked ? arrayUnion(pkg) : arrayRemove(pkg) }), "تم الحفظ");
     }
   });
@@ -590,6 +598,7 @@ function tabWeb(el) {
   const p = pol();
   const web = p.web || {};
   const blocked = new Set(web.blocked || []);
+  const allowed = new Set(web.allowed || []);
   const data = S.web || {};
   let domains = Object.entries(data.domains || {}).map(([name, v]) => ({ name, c: v.c || 0, t: v.t || 0, b: !!v.b }));
   if (S.hideSystemDomains) domains = domains.filter((d) => !SYSTEM_DOMAIN.test(d.name));
@@ -597,7 +606,18 @@ function tabWeb(el) {
   const urls = Object.values(data.urls || {}).sort((a, b) => (b.t || 0) - (a.t || 0));
   const days = [...Array(7)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - i); return d; });
 
+  const link = (u) => (/^[a-z]+:\/\//i.test(u) ? u : "https://" + u);
   el.innerHTML = `
+  ${S.requests.length ? `<div class="card stack" style="margin-bottom:12px;border-color:var(--primary)">
+    <h2>📨 طلبات السماح بمواقع (${S.requests.length})</h2>
+    <div class="list">${S.requests.map((q) => `
+      <div class="item domain-row">
+        <span style="min-width:0"><a class="mono" href="${esc(link(q.url || q.domain))}" target="_blank" rel="noopener" title="${esc(q.url || "")}">${esc(q.domain)}</a>
+          <span class="muted small"> · ${q.ts ? esc(fmtTime.format(new Date(tsMs(q.ts)))) : ""}</span></span>
+        <button class="btn sm primary" data-approve="${esc(q.id)}">سماح</button>
+        <button class="btn sm" data-reject="${esc(q.id)}">رفض</button>
+      </div>`).join("")}</div>
+  </div>` : ""}
   <div class="cols">
     <div class="card">
       <h2>إعدادات المواقع</h2>
@@ -605,6 +625,8 @@ function tabWeb(el) {
         <label class="switch"><input type="checkbox" data-web="log" ${web.log !== false ? "checked" : ""}></label></div>
       <div class="setting"><div class="txt"><b>منع المواقع المحظورة</b><span class="small muted">يمنع فتح المواقع في القائمة على كل التطبيقات، ويمنع تغيير VPN و DNS الخاص.</span></div>
         <label class="switch"><input type="checkbox" data-web="filter" ${web.filter ? "checked" : ""}></label></div>
+      <div class="setting"><div class="txt"><b>السماح فقط بالمواقع المسموحة</b><span class="small muted">يمنع كل المواقع في المتصفحات ما عدا قائمة «المواقع المسموحة». يستطيع الطفل إرسال طلب للسماح بموقع. المتصفحات غير المدعومة تُمنع.</span></div>
+        <label class="switch"><input type="checkbox" data-web="allowOnly" ${web.allowOnly ? "checked" : ""}></label></div>
       <div class="setting"><div class="txt"><b>البحث الآمن</b><span class="small muted">يفرض البحث الآمن في Google و Bing ووضع يوتيوب المقيّد.</span></div>
         <label class="switch"><input type="checkbox" data-web="safeSearch" ${web.safeSearch ? "checked" : ""}></label></div>
     </div>
@@ -620,6 +642,15 @@ function tabWeb(el) {
     </div>
   </div>
   <div class="card stack" style="margin-top:12px">
+    <h2>المواقع المسموحة ${web.allowOnly ? `<span class="badge ok">مفعّل</span>` : `<span class="badge">غير مفعّل</span>`}</h2>
+    <p class="small muted" style="margin:0">تُستعمل عند تفعيل «السماح فقط بالمواقع المسموحة». السماح بنطاق يسمح بكل صفحاته الفرعية.</p>
+    <form class="row" id="addAllowed">
+      <input class="input mono" style="flex:1;min-width:160px" id="allowedDomain" placeholder="wikipedia.org">
+      <button class="btn primary" type="submit">سماح</button>
+    </form>
+    <div class="chips">${[...allowed].sort().map((d) => `<span class="chip"><a class="mono" href="https://${esc(d)}" target="_blank" rel="noopener">${esc(d)}</a><button title="إزالة" data-disallow="${esc(d)}">×</button></span>`).join("") || `<span class="muted small">لا توجد مواقع مسموحة بعد</span>`}</div>
+  </div>
+  <div class="card stack" style="margin-top:12px">
     <div class="row">
       <h2 style="margin:0">سجل التصفح</h2>
       <span class="spacer"></span>
@@ -628,12 +659,12 @@ function tabWeb(el) {
     </div>
     ${S.web === null ? `<div class="empty">جارٍ التحميل…</div>` : ""}
     ${urls.length ? `<h3>صفحات من المتصفح</h3><div class="list">${urls.slice(0, 100).map((u) => `
-      <div class="item domain-row"><span class="mono" title="${esc(u.u)}">${esc(u.u)}</span><span class="muted small">${esc(fmtTime.format(new Date(u.t || 0)))}</span><span></span></div>`).join("")}</div>` : ""}
+      <div class="item domain-row"><a class="mono" href="${esc(link(u.u))}" target="_blank" rel="noopener" title="${esc(u.u)}">${esc(u.u)}</a><span class="muted small">${esc(fmtTime.format(new Date(u.t || 0)))}</span><span></span></div>`).join("")}</div>` : ""}
     <h3>النطاقات (${domains.length})</h3>
     <div class="list">${domains.slice(0, 400).map((d) => {
       const isB = isBlockedDomain(d.name, blocked);
       return `<div class="item domain-row">
-        <span class="mono" title="${esc(d.name)}">${d.b ? "🚫 " : ""}${esc(d.name)}</span>
+        <a class="mono" href="https://${esc(d.name)}" target="_blank" rel="noopener" title="${esc(d.name)}">${d.b ? "🚫 " : ""}${esc(d.name)}</a>
         <span class="muted small">${esc(fmtTime.format(new Date(d.t)))} · ${d.c}×</span>
         ${isB ? `<button class="btn sm" data-unblock="${esc(normDomain(d.name) || d.name)}">إلغاء الحظر</button>` : `<button class="btn sm danger" data-block="${esc(d.name)}">حظر</button>`}
       </div>`;
@@ -659,17 +690,38 @@ function tabWeb(el) {
     if (!d) return;
     run(updateDoc(devRef(), { "policy.web.blocked": arrayUnion(d) }), `تم حظر ${d}`);
   }));
+  document.getElementById("addAllowed").onsubmit = (e) => {
+    e.preventDefault();
+    const d = normDomain(document.getElementById("allowedDomain").value);
+    if (!d) return toast("اكتب نطاقاً صحيحاً مثل example.com");
+    run(updateDoc(devRef(), { "policy.web.allowed": arrayUnion(d) }), `تم السماح بـ ${d}`);
+  };
+  el.querySelectorAll("[data-disallow]").forEach((b) => (b.onclick = () =>
+    run(updateDoc(devRef(), { "policy.web.allowed": arrayRemove(b.dataset.disallow) }), "تمت الإزالة")));
+  el.querySelectorAll("[data-approve]").forEach((b) => (b.onclick = () => {
+    const q = S.requests.find((x) => x.id === b.dataset.approve);
+    const d = q && normDomain(q.domain);
+    if (!d) return;
+    run(Promise.all([
+      updateDoc(devRef(), { "policy.web.allowed": arrayUnion(d), "policy.web.blocked": arrayRemove(d) }),
+      updateDoc(doc(db, "devices", S.deviceId, "requests", q.id), { status: "approved", doneAt: serverTimestamp() }),
+    ]), `تم السماح بـ ${d}`);
+  }));
+  el.querySelectorAll("[data-reject]").forEach((b) => (b.onclick = () =>
+    run(updateDoc(doc(db, "devices", S.deviceId, "requests", b.dataset.reject), { status: "rejected", doneAt: serverTimestamp() }), "تم الرفض")));
   document.getElementById("webDay").onchange = (e) => { S.webDay = e.target.value; listenWeb(); renderDevice(); };
   document.getElementById("hideSys").onchange = (e) => { S.hideSystemDomains = e.target.checked; renderDevice(); };
 }
 
 // ----- tab: rules -----
+// Rules that also work in "normal protection" (enforced with the owner PIN); the rest need Device Owner
+const RULES_NORMAL = new Set(["lock_settings", "no_install_apps", "no_uninstall_apps", "no_install_unknown_sources"]);
 const RULES = [
-  ["no_install_apps", "منع تثبيت التطبيقات", "يمنع التثبيت من المتجر ومن الملفات."],
-  ["no_uninstall_apps", "منع حذف التطبيقات", ""],
-  ["no_install_unknown_sources", "منع التثبيت من مصادر غير معروفة", ""],
+  ["no_install_apps", "منع تثبيت التطبيقات", "يمنع التثبيت من المتجر (Play Store) ومن الملفات. في الحماية العادية: يُقفل المتجر برمز المالك."],
+  ["no_uninstall_apps", "منع حذف التطبيقات", "في الحماية العادية: تُقفل شاشة الحذف برمز المالك."],
+  ["no_install_unknown_sources", "منع التثبيت من مصادر غير معروفة", "ملفات APK من خارج المتجر (واتساب، المتصفح…). لا يمنع Play Store."],
   ["no_control_apps", "منع إيقاف التطبيقات أو مسح بياناتها", "يحمي تطبيق المراقبة من الإيقاف."],
-  ["lock_settings", "قفل تطبيق الإعدادات برمز الوالد", "يحتاج خدمة إمكانية الوصول."],
+  ["lock_settings", "قفل تطبيق الإعدادات برمز المالك", "يحتاج خدمة إمكانية الوصول."],
   ["no_config_date_time", "منع تغيير التاريخ والوقت", "يمنع التحايل على الحدود اليومية."],
   ["no_factory_reset", "منع إعادة ضبط المصنع", ""],
   ["no_safe_boot", "منع الوضع الآمن", ""],
@@ -692,11 +744,12 @@ const RULES = [
 function tabRules(el) {
   const p = pol();
   const r = p.restrictions || {};
+  const full = !!(dev().status && dev().status.deviceOwner);
   el.innerHTML = `
   <div class="cols">
     <div class="card stack">
-      <h2>رمز الوالد</h2>
-      <p class="small muted">يُطلب لفتح التطبيقات المقفلة، والسماح المؤقت بالتطبيقات المحظورة، وفتح تطبيق Zemory Family Guard على الجهاز.</p>
+      <h2>رمز المالك</h2>
+      <p class="small muted">يُطلب لفتح التطبيقات المقفلة، والسماح المؤقت بالتطبيقات والمواقع المحظورة، وفتح الإعدادات وتطبيق Zemory Family Guard على الجهاز.</p>
       <div>${p.pinHash ? `<span class="badge ok">✓ تم تعيين الرمز</span>` : `<span class="badge warn">لم يتم تعيين رمز</span>`}</div>
       <form class="row" id="pinForm">
         <input class="input mono" id="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" placeholder="4–8 أرقام" style="flex:1;min-width:140px">
@@ -705,9 +758,10 @@ function tabRules(el) {
     </div>
     <div class="card">
       <h2>القيود على الجهاز</h2>
-      <p class="small muted">تتطلب أن يكون التطبيق «مالك الجهاز».</p>
+      ${full ? `<p class="small muted">الجهاز في «حماية كاملة»: كل القيود تعمل.</p>`
+        : `<p class="notice">الجهاز في «حماية عادية»: القيود المعلّمة بـ «تحتاج حماية كاملة» لا يطبّقها أندرويد. فعّل الحماية الكاملة عبر الكمبيوتر لتعمل كلها.</p>`}
       ${RULES.map(([k, t, h]) => `
-        <div class="setting"><div class="txt"><b>${esc(t)}</b>${h ? `<span class="small muted">${esc(h)}</span>` : ""}</div>
+        <div class="setting"><div class="txt"><b>${esc(t)}</b>${!full && !RULES_NORMAL.has(k) ? ` <span class="badge warn">تحتاج حماية كاملة</span>` : ""}${h ? `<span class="small muted">${esc(h)}</span>` : ""}</div>
           <label class="switch"><input type="checkbox" data-rule="${k}" ${r[k] ? "checked" : ""}></label></div>`).join("")}
     </div>
   </div>`;

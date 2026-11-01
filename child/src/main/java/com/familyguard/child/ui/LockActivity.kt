@@ -10,33 +10,51 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.familyguard.child.Domains
 import com.familyguard.child.Guard
+import com.familyguard.child.Prefs
 import com.familyguard.child.enforce.Enforcer
+import com.familyguard.child.sync.Repo
+import com.google.firebase.firestore.FieldValue
 import kotlin.concurrent.thread
 
-/** Full screen shown over a blocked app, a PIN-locked app or a blocked website. */
+/**
+ * Full screen shown over a blocked app, a PIN-locked app or a blocked website.
+ * For websites the child can send a request to the owner to allow the site.
+ */
 class LockActivity : ComponentActivity() {
 
     private var target by mutableStateOf("")
     private var reason by mutableStateOf("blocked")
     private var error by mutableStateOf<String?>(null)
+    private var requestUrl by mutableStateOf("")
+    private var requestState by mutableStateOf("") // "", "sending", "sent", "error"
+    private var showPin by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,6 +73,9 @@ class LockActivity : ComponentActivity() {
     private fun read(i: Intent?) {
         target = i?.getStringExtra("t") ?: ""
         reason = i?.getStringExtra("r") ?: "blocked"
+        requestUrl = i?.getStringExtra("u") ?: target
+        requestState = ""
+        showPin = false
         error = null
     }
 
@@ -67,9 +88,11 @@ class LockActivity : ComponentActivity() {
         packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
     }.getOrDefault(pkg)
 
+    private val isWeb get() = reason == "web" || reason == "request"
+
     private fun submit(pin: String) {
         if (Guard.policy.pinHash.isEmpty()) {
-            error = "لم يتم تعيين رمز الوالد من لوحة التحكم"
+            error = "لم يتم تعيين رمز المالك من لوحة التحكم"
             return
         }
         if (!Guard.checkPin(pin)) {
@@ -77,64 +100,135 @@ class LockActivity : ComponentActivity() {
             return
         }
         val now = System.currentTimeMillis()
-        if (reason == "pin") {
-            Guard.unlockedUntil[target] = now + 10 * 60_000L
-        } else {
-            Guard.overrideUntil[target] = now + 30 * 60_000L
-            val ctx = applicationContext
-            val pkg = target
-            thread {
-                runCatching { Enforcer.apply(ctx) }
-                ctx.packageManager.getLaunchIntentForPackage(pkg)?.let {
-                    runCatching { ctx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        when {
+            reason == "pin" -> Guard.unlockedUntil[target] = now + 10 * 60_000L
+            reason == "web" -> Guard.overrideUntil["web:$target"] = now + 30 * 60_000L
+            else -> {
+                Guard.overrideUntil[target] = now + 30 * 60_000L
+                val ctx = applicationContext
+                val pkg = target
+                thread {
+                    runCatching { Enforcer.apply(ctx) }
+                    ctx.packageManager.getLaunchIntentForPackage(pkg)?.let {
+                        runCatching { ctx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    }
                 }
             }
         }
         finish()
     }
 
-    @androidx.compose.runtime.Composable
+    /** Sends devices/{id}/requests/{domain} for the owner to approve in the parent app. */
+    private fun sendRequest() {
+        val host = Domains.hostOf(requestUrl)
+        if (host == null) {
+            requestState = "error"
+            return
+        }
+        val id = Prefs(this).deviceId ?: run { requestState = "error"; return }
+        requestState = "sending"
+        val url = requestUrl.trim().take(500)
+        Repo.device(id).collection("requests").document(host).set(
+            mapOf(
+                "domain" to host,
+                "url" to url,
+                "status" to "pending",
+                "ts" to FieldValue.serverTimestamp(),
+            )
+        ).addOnSuccessListener { requestState = "sent" }
+            .addOnFailureListener { requestState = "error" }
+    }
+
+    @Composable
     private fun Screen() {
         val (icon, title) = when (reason) {
             "pin" -> "🔒" to "هذا التطبيق مقفل"
             "limit" -> "⏳" to "انتهى وقت الاستخدام لهذا اليوم"
             "bedtime" -> "🌙" to "حان وقت النوم"
             "paused" -> "⏸" to "الأجهزة متوقفة مؤقتاً"
-            "web" -> "🚫" to "هذا الموقع محظور"
+            "browser" -> "🌐" to "هذا المتصفح غير مسموح"
+            "web" -> "🚫" to "هذا الموقع غير مسموح"
+            "request" -> "📨" to "طلب السماح بموقع"
             else -> "🚫" to "هذا التطبيق محظور"
         }
-        val name = if (reason == "web") target else appLabel(target)
+        val name = when (reason) {
+            "web" -> target
+            "request" -> ""
+            "browser" -> appLabel(target) + " — استعمل متصفحاً مدعوماً مثل Chrome"
+            else -> appLabel(target)
+        }
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Text(icon, fontSize = 56.sp)
-                Spacer(Modifier.height(8.dp))
-                Text(title, fontSize = 24.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-                Spacer(Modifier.height(4.dp))
-                Text(name, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(24.dp))
-                if (reason != "web") {
-                    if (reason != "pin") {
-                        Text("يمكن للوالد السماح مؤقتاً لمدة 30 دقيقة", fontSize = 14.sp)
-                        Spacer(Modifier.height(12.dp))
+                Column(Modifier.widthIn(max = 480.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(icon, fontSize = 56.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text(title, fontSize = 24.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                    if (name.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(name, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                     }
-                    PinPad(error) { submit(it) }
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(24.dp))
+
+                    if (isWeb) RequestBox()
+
+                    if (reason != "request") {
+                        if (reason == "pin" || showPin) {
+                            if (reason != "pin") {
+                                Text("يمكن للمالك السماح مؤقتاً لمدة 30 دقيقة", fontSize = 14.sp)
+                                Spacer(Modifier.height(12.dp))
+                            }
+                            PinPad(error) { submit(it) }
+                            Spacer(Modifier.height(16.dp))
+                        } else {
+                            TextButton(onClick = { showPin = true }) { Text("🔑 رمز المالك") }
+                        }
+                    }
+                    OutlinedButton(onClick = { goHome() }) { Text("رجوع") }
                 }
-                OutlinedButton(onClick = { goHome() }) { Text("رجوع") }
             }
         }
     }
 
+    @Composable
+    private fun RequestBox() {
+        Text(
+            if (reason == "request") "اكتب أو الصق رابط الموقع الذي تريد زيارته، وسيصل الطلب إلى المالك."
+            else "يمكنك طلب السماح بهذا الموقع من المالك:",
+            fontSize = 14.sp, textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            requestUrl, { requestUrl = it; if (requestState != "sending") requestState = "" },
+            label = { Text("رابط الموقع") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        when (requestState) {
+            "sent" -> Text("✅ تم إرسال الطلب. حاول مرة أخرى بعد موافقة المالك.", color = MaterialTheme.colorScheme.primary, textAlign = TextAlign.Center)
+            "error" -> Text("تعذّر الإرسال. تأكد من الرابط والاتصال بالإنترنت.", color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+        }
+        if (requestState != "sent") {
+            Button(
+                onClick = { sendRequest() },
+                enabled = requestState != "sending" && requestUrl.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (requestState == "sending") "جارٍ الإرسال..." else "📨 اطلب السماح") }
+        }
+        Spacer(Modifier.height(20.dp))
+    }
+
     companion object {
-        fun show(ctx: Context, target: String, reason: String) {
+        fun show(ctx: Context, target: String, reason: String, url: String? = null) {
             val i = Intent(ctx, LockActivity::class.java)
                 .putExtra("t", target)
                 .putExtra("r", reason)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            if (url != null) i.putExtra("u", url)
             runCatching { ctx.startActivity(i) }
         }
     }

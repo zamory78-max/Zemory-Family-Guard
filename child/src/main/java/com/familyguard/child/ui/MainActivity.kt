@@ -131,10 +131,14 @@ class MainActivity : ComponentActivity() {
     private fun PinGate() {
         var err by remember { mutableStateOf<String?>(null) }
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("هذه الشاشة للوالد فقط", fontWeight = FontWeight.Bold)
+            Text("هذه الشاشة للمالك فقط", fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(12.dp))
             PinPad(err) { pin ->
                 if (Guard.checkPin(pin)) unlocked = true else err = "رمز غير صحيح"
+            }
+            Spacer(Modifier.height(24.dp))
+            OutlinedButton(onClick = { LockActivity.show(this@MainActivity, "", "request") }) {
+                Text("📨 اطلب السماح بموقع")
             }
         }
     }
@@ -384,7 +388,7 @@ class MainActivity : ComponentActivity() {
         }
 
         steps += Step(
-            "رمز الوالد",
+            "رمز المالك",
             "عيّنه من تطبيق الوالد ← الجهاز ← القيود والإعدادات. بعدها يُقفل هذا التطبيق والإعدادات برمزك.",
             Guard.policy.pinHash.isNotEmpty(), null, null, null,
         )

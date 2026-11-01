@@ -19,6 +19,8 @@ data class Policy(
     val webLog: Boolean = true,
     val safeSearch: Boolean = false,
     val blockedDomains: Set<String> = emptySet(),
+    val allowOnly: Boolean = false,
+    val allowedDomains: Set<String> = emptySet(),
     val bedtimeEnabled: Boolean = false,
     val bedStart: String = "21:00",
     val bedEnd: String = "07:00",
@@ -61,6 +63,9 @@ data class Policy(
                 safeSearch = web.optBoolean("safeSearch", false),
                 blockedDomains = web.optJSONArray("blocked").strings()
                     .mapNotNull { Domains.normalize(it) }.toSet(),
+                allowOnly = web.optBoolean("allowOnly", false),
+                allowedDomains = web.optJSONArray("allowed").strings()
+                    .mapNotNull { Domains.normalize(it) }.toSet(),
                 bedtimeEnabled = bed.optBoolean("enabled", false),
                 bedStart = bed.optString("start", "21:00"),
                 bedEnd = bed.optString("end", "07:00"),
@@ -90,6 +95,8 @@ data class Policy(
                 "log" to true,
                 "safeSearch" to false,
                 "blocked" to emptyList<String>(),
+                "allowOnly" to false,
+                "allowed" to emptyList<String>(),
             ),
             "bedtime" to mapOf(
                 "enabled" to false,
@@ -155,6 +162,11 @@ object Domains {
 
     /** Host from a browser address bar text, or null if it does not look like a URL. */
     fun hostOf(text: String): String? = normalize(text)
+
+    /** Is this site blocked by the block list or (in allow-only mode) missing from the allow list? */
+    fun isSiteBlocked(host: String, p: Policy): Boolean =
+        (p.webFilter && isBlocked(host, p.blockedDomains)) ||
+            (p.allowOnly && !isBlocked(host, p.allowedDomains))
 
     fun isBlocked(name: String, blocked: Set<String>): Boolean {
         if (blocked.isEmpty()) return false

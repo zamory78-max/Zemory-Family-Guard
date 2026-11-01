@@ -201,3 +201,7 @@ pre.code { background: var(--surface-2); padding: 10px; border-radius: 8px; over
 
 .alert { padding: 12px 14px; border-radius: 12px; background: var(--danger-soft); color: var(--danger); font-weight: 600; margin-bottom: 12px; }
 .pair-code { font-size: 44px; font-weight: 700; letter-spacing: 6px; text-align: center; padding: 14px; border-radius: 14px; background: var(--primary-soft); color: var(--primary); }
+.tab .count { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--danger); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
+a.mono { color: inherit; text-decoration: none; }
+a.mono:hover { color: var(--primary); text-decoration: underline; }
+.domain-row a.mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }

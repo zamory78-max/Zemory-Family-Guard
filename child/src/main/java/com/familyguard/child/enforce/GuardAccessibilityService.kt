@@ -47,7 +47,7 @@ class GuardAccessibilityService : AccessibilityService() {
             LockActivity.show(this, pkg, reason)
             return
         }
-        if (!Guard.isPaused(this) && Enforcer.isPinLocked(pkg) && !Guard.isUnlocked(pkg)) {
+        if (!Guard.isPaused(this) && Enforcer.isPinLocked(this, pkg) && !Guard.isUnlocked(pkg)) {
             LockActivity.show(this, pkg, "pin")
         }
     }
@@ -68,9 +68,9 @@ class GuardAccessibilityService : AccessibilityService() {
             lastUrl = text
             WebLog.url(text, pkg)
             val p = Guard.policy
-            if (p.webFilter && Domains.isBlocked(host, p.blockedDomains)) {
+            if (!Guard.isPaused(this) && !Guard.isOverridden("web:$host") && Domains.isSiteBlocked(host, p)) {
                 performGlobalAction(GLOBAL_ACTION_BACK)
-                LockActivity.show(this, host, "web")
+                LockActivity.show(this, host, "web", url = text)
             }
             return
         }

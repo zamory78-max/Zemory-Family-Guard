@@ -51,7 +51,7 @@ fun PinPad(error: String?, onSubmit: (String) -> Unit) {
     var pin by remember { mutableStateOf("") }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
-            if (pin.isEmpty()) "أدخل رمز الوالد" else "●".repeat(pin.length),
+            if (pin.isEmpty()) "أدخل رمز المالك" else "●".repeat(pin.length),
             fontSize = 26.sp,
             fontWeight = FontWeight.Bold,
         )

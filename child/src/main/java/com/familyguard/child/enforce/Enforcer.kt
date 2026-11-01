@@ -48,6 +48,18 @@ object Enforcer {
         Settings.Secure.getString(ctx.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
             ?.substringBefore('/')?.let { ess += it }
         essentialsCache = ess
+
+        val web = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("http://example.com"))
+        browsersCache = pm.queryIntentActivities(web, android.content.pm.PackageManager.MATCH_ALL)
+            .map { it.activityInfo.packageName }.toSet()
+    }
+
+    private var browsersCache: Set<String> = emptySet()
+
+    /** Browsers whose address bar we cannot read: blocked in allow-only mode. */
+    fun isUnsupportedBrowser(ctx: Context, pkg: String): Boolean {
+        refreshCaches(ctx)
+        return pkg in browsersCache && !GuardAccessibilityService.BROWSERS.containsKey(pkg)
     }
 
     fun launchable(ctx: Context): Set<String> {
@@ -102,6 +114,7 @@ object Enforcer {
         if (pkg in essentials(ctx)) return null
         val p = Guard.policy
         if (pkg in p.blocked) return "blocked"
+        if (p.allowOnly && isUnsupportedBrowser(ctx, pkg)) return "browser"
         val lim = p.limits[pkg] ?: 0
         if (lim > 0 && (Guard.usageToday[pkg] ?: 0) >= lim) return "limit"
         if (allDown(p) && pkg !in p.bedAllowed && pkg in launchable(ctx)) {
@@ -110,10 +123,28 @@ object Enforcer {
         return null
     }
 
-    fun isPinLocked(pkg: String): Boolean {
+    /** App stores and the system screen that installs / uninstalls APKs. */
+    val STORE_PKGS = setOf(
+        "com.android.vending", "com.sec.android.app.samsungapps", "com.xiaomi.mipicks",
+        "com.huawei.appmarket", "com.heytap.market", "com.oppo.market", "com.vivo.appstore",
+        "com.transsion.phoenix", "com.amazon.venezia",
+    )
+    val INSTALLER_PKGS = setOf(
+        "com.google.android.packageinstaller", "com.android.packageinstaller",
+        "com.samsung.android.packageinstaller", "com.miui.packageinstaller",
+    )
+
+    fun isPinLocked(ctx: Context, pkg: String): Boolean {
         val p = Guard.policy
         if (p.pinHash.isEmpty()) return false
         if (pkg in p.pinLocked) return true
-        return p.restrictions["lock_settings"] == true && pkg in SETTINGS_PKGS
+        val r = p.restrictions
+        if (r["lock_settings"] == true && pkg in SETTINGS_PKGS) return true
+        // Without Device Owner, Android ignores install restrictions: enforce them with the owner PIN instead.
+        if (!Dpm.isOwner(ctx)) {
+            if (r["no_install_apps"] == true && (pkg in STORE_PKGS || pkg in INSTALLER_PKGS)) return true
+            if ((r["no_install_unknown_sources"] == true || r["no_uninstall_apps"] == true) && pkg in INSTALLER_PKGS) return true
+        }
+        return false
     }
 }

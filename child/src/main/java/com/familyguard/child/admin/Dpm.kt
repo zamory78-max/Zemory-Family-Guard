@@ -121,9 +121,12 @@ object Dpm {
     private fun applyBrowserConfig(ctx: Context, p: Policy) {
         val b = Bundle()
         if (p.needsVpn) b.putString("DnsOverHttpsMode", "off")
-        if (p.webFilter) {
-            b.putInt("IncognitoModeAvailability", 1)
-            if (p.blockedDomains.isNotEmpty()) b.putStringArray("URLBlocklist", p.blockedDomains.toTypedArray())
+        if (p.webFilter || p.allowOnly) b.putInt("IncognitoModeAvailability", 1)
+        if (p.allowOnly) {
+            b.putStringArray("URLBlocklist", arrayOf("*"))
+            b.putStringArray("URLAllowlist", p.allowedDomains.toTypedArray())
+        } else if (p.webFilter && p.blockedDomains.isNotEmpty()) {
+            b.putStringArray("URLBlocklist", p.blockedDomains.toTypedArray())
         }
         if (p.safeSearch) {
             b.putBoolean("ForceGoogleSafeSearch", true)
