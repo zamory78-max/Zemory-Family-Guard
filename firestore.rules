@@ -1,0 +1,24 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function ownsDevice(deviceId) {
+      return signedIn() &&
+        get(/databases/$(database)/documents/devices/$(deviceId)).data.ownerUid == request.auth.uid;
+    }
+
+    // Each device belongs to one parent account (ownerUid).
+    match /devices/{deviceId} {
+      allow read, delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if signedIn() && resource.data.ownerUid == request.auth.uid
+                    && request.resource.data.ownerUid == request.auth.uid;
+
+      // commands, apps list, web history
+      match /{sub=**} {
+        allow read, write: if ownsDevice(deviceId);
+      }
+    }
+  }
+}

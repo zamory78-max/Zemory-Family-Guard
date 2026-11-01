@@ -1,0 +1,151 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      project_id: ${{ steps.cfg.outputs.project_id }}
+      hosting: ${{ steps.cfg.outputs.hosting }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Firebase configuration from secrets
+        id: cfg
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          FIREBASE_WEB_CONFIG: ${{ secrets.FIREBASE_WEB_CONFIG }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "::error title=Missing secret::Add the GOOGLE_SERVICES_JSON secret (content of google-services.json for package com.familyguard.child). See README."
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON" > child/google-services.json
+          PROJECT_ID=$(jq -r '.project_info.project_id' child/google-services.json)
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "hosting=true" >> "$GITHUB_OUTPUT"
+            APK_URL="https://$PROJECT_ID.web.app/apk/FamilyGuard-Child.apk"
+          else
+            echo "hosting=false" >> "$GITHUB_OUTPUT"
+            APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/latest/FamilyGuard-Child.apk"
+          fi
+
+          if [ -n "$FIREBASE_WEB_CONFIG" ]; then
+            WEB_CFG="$FIREBASE_WEB_CONFIG"
+          else
+            # Fallback: derive a web config from google-services.json
+            WEB_CFG=$(jq -c --arg pid "$PROJECT_ID" '{
+              apiKey: .client[0].api_key[0].current_key,
+              authDomain: ($pid + ".firebaseapp.com"),
+              projectId: $pid,
+              storageBucket: .project_info.storage_bucket,
+              messagingSenderId: .project_info.project_number,
+              appId: .client[0].client_info.mobilesdk_app_id
+            }' child/google-services.json)
+          fi
+          {
+            echo "window.FIREBASE_CONFIG = $WEB_CFG;"
+            echo "window.FG_CHILD_APK_URL = \"$APK_URL\";"
+          } > web/config.js
+
+      - name: Signing key from secrets
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "SIGNING_STORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning title=No signing key::APKs are signed with a temporary debug key. Run the 'Create signing key' workflow and add SIGNING_KEYSTORE_BASE64 + SIGNING_PASSWORD secrets (see README) before installing on devices."
+          fi
+
+      - name: Build APKs
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: gradle :child:assembleRelease :parent:assembleRelease --no-daemon --stacktrace
+
+      - name: Collect outputs
+        run: |
+          mkdir -p dist/hosting/apk
+          cp child/build/outputs/apk/release/child-release.apk dist/FamilyGuard-Child.apk
+          cp parent/build/outputs/apk/release/parent-release.apk dist/FamilyGuard-Parent.apk
+          cp -r web/. dist/hosting/
+          cp dist/*.apk dist/hosting/apk/
+          rm -f dist/hosting/config.example.js
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FamilyGuard-APKs
+          path: dist/*.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hosting
+          path: dist/hosting
+
+      - name: Publish "latest" release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest dist/FamilyGuard-Child.apk dist/FamilyGuard-Parent.apk \
+            --title "Zemory Family Guard — آخر إصدار (build ${GITHUB_RUN_NUMBER})" \
+            --notes "FamilyGuard-Child.apk: يُثبَّت على أجهزة الأطفال (هاتف/تابلت/تلفاز). FamilyGuard-Parent.apk: تطبيق الوالد." \
+            --target "$GITHUB_SHA" --latest
+
+      - name: Publish versioned release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/FamilyGuard-Child.apk dist/FamilyGuard-Parent.apk \
+            --title "$GITHUB_REF_NAME" --generate-notes
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build.outputs.hosting == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: hosting
+          path: dist/hosting
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Deploy dashboard, APKs and Firestore rules to Firebase
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PROJECT_ID: ${{ needs.build.outputs.project_id }}
+        run: |
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
+          npx --yes firebase-tools@13 deploy --only hosting,firestore:rules --project "$PROJECT_ID" --non-interactive

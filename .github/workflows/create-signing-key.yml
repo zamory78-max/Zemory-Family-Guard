@@ -1,0 +1,35 @@
+name: Create signing key
+
+# Run once from the Actions tab. Requires the SIGNING_PASSWORD secret.
+# Produces an artifact "signing-key" with keystore-base64.txt:
+# copy its content into a new secret SIGNING_KEYSTORE_BASE64, then delete the artifact.
+on:
+  workflow_dispatch:
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Generate keystore
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          if [ ${#SIGNING_PASSWORD} -lt 6 ]; then
+            echo "::error::Create the SIGNING_PASSWORD secret first (at least 6 characters)."
+            exit 1
+          fi
+          mkdir out
+          keytool -genkeypair -keystore out/release.jks -storetype PKCS12 \
+            -storepass "$SIGNING_PASSWORD" -keypass "$SIGNING_PASSWORD" \
+            -alias zemory -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Zemory Family Guard, O=Zemory, C=DZ"
+          base64 -w0 out/release.jks > out/keystore-base64.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signing-key
+          path: out/
+          retention-days: 1

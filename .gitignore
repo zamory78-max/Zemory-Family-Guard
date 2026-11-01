@@ -1,0 +1,15 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.kotlin/
+# Firebase config is injected by GitHub Actions from secrets
+child/google-services.json
+web/config.js
+dist/
+keystore/
+*.jks
+*.keystore
