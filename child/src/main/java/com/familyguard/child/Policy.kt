@@ -89,6 +89,7 @@ data class Policy(
                 "no_config_date_time" to true,
                 "no_control_apps" to true,
                 "lock_settings" to true,
+                "lock_youtube_settings" to true,
             ),
             "web" to mapOf(
                 "filter" to false,

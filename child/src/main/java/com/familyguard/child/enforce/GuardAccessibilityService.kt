@@ -20,6 +20,7 @@ class GuardAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val e = event ?: return
         val pkg = e.packageName?.toString() ?: return
+        if (pkg in YOUTUBE_PKGS) checkYoutubeSettings(e)
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 onForeground(pkg)
@@ -76,9 +77,49 @@ class GuardAccessibilityService : AccessibilityService() {
         }
     }
 
+    private var lastYtCheck = 0L
+
+    /** Locks YouTube's settings / history screens with the owner PIN (so watch history can't be cleared or paused). */
+    private fun checkYoutubeSettings(e: AccessibilityEvent) {
+        val p = Guard.policy
+        if (p.restrictions["lock_youtube_settings"] != true || p.pinHash.isEmpty()) return
+        if (Guard.isPaused(this) || Guard.isUnlocked(YT_SETTINGS)) return
+        val cls = e.className?.toString().orEmpty()
+        var hit = e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            !cls.startsWith("android.") && cls.contains("settings", ignoreCase = true)
+        if (!hit) {
+            val now = System.currentTimeMillis()
+            if (now - lastYtCheck < 800) return
+            lastYtCheck = now
+            val root = try {
+                rootInActiveWindow
+            } catch (_: Exception) {
+                null
+            } ?: return
+            hit = YT_MARKERS.any { m -> root.findAccessibilityNodeInfosByText(m)?.isNotEmpty() == true }
+        }
+        if (hit) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            LockActivity.show(this, YT_SETTINGS, "ytsettings")
+        }
+    }
+
     override fun onInterrupt() {}
 
     companion object {
+        const val YT_SETTINGS = "youtube-settings"
+        val YOUTUBE_PKGS = setOf(
+            "com.google.android.youtube", "com.google.android.apps.youtube.kids", "com.google.android.youtube.tv",
+        )
+        /** Text that only appears on YouTube's settings / history management screens. */
+        private val YT_MARKERS = listOf(
+            "History & privacy", "Manage all history", "Clear watch history", "Clear all watch history",
+            "Pause watch history", "Clear search history",
+            "Historique et confidentialité", "Gérer tout l'historique", "Effacer l'historique des vidéos regardées",
+            "السجلّ والخصوصية", "السجل والخصوصية", "إدارة كل السجلّ", "إدارة كل السجل",
+            "محو سجلّ المشاهدة", "محو سجل المشاهدة", "محو كل سجلّ المشاهدة", "إيقاف سجلّ المشاهدة مؤقتًا",
+        )
+
         /** Browser package -> address bar view ids. */
         val BROWSERS: Map<String, List<String>> = mapOf(
             "com.android.chrome" to listOf("url_bar"),

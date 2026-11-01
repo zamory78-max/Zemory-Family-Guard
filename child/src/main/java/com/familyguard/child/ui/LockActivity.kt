@@ -101,7 +101,7 @@ class LockActivity : ComponentActivity() {
         }
         val now = System.currentTimeMillis()
         when {
-            reason == "pin" -> Guard.unlockedUntil[target] = now + 10 * 60_000L
+            reason == "pin" || reason == "ytsettings" -> Guard.unlockedUntil[target] = now + 10 * 60_000L
             reason == "web" -> Guard.overrideUntil["web:$target"] = now + 30 * 60_000L
             else -> {
                 Guard.overrideUntil[target] = now + 30 * 60_000L
@@ -143,6 +143,7 @@ class LockActivity : ComponentActivity() {
     private fun Screen() {
         val (icon, title) = when (reason) {
             "pin" -> "🔒" to "هذا التطبيق مقفل"
+            "ytsettings" -> "🔒" to "إعدادات وسجلّ يوتيوب مقفلة"
             "limit" -> "⏳" to "انتهى وقت الاستخدام لهذا اليوم"
             "bedtime" -> "🌙" to "حان وقت النوم"
             "paused" -> "⏸" to "الأجهزة متوقفة مؤقتاً"
@@ -154,6 +155,7 @@ class LockActivity : ComponentActivity() {
         val name = when (reason) {
             "web" -> target
             "request" -> ""
+            "ytsettings" -> "أدخل رمز المالك لفتحها 10 دقائق"
             "browser" -> appLabel(target) + " — استعمل متصفحاً مدعوماً مثل Chrome"
             else -> appLabel(target)
         }
@@ -176,8 +178,8 @@ class LockActivity : ComponentActivity() {
                     if (isWeb) RequestBox()
 
                     if (reason != "request") {
-                        if (reason == "pin" || showPin) {
-                            if (reason != "pin") {
+                        if (reason == "pin" || reason == "ytsettings" || showPin) {
+                            if (reason != "pin" && reason != "ytsettings") {
                                 Text("يمكن للمالك السماح مؤقتاً لمدة 30 دقيقة", fontSize = 14.sp)
                                 Spacer(Modifier.height(12.dp))
                             }
