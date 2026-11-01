@@ -101,7 +101,7 @@ internal sealed class AgentService : BackgroundService
                     }
                     if (_policy.WebLog && now - lastHistory > TimeSpan.FromMinutes(3))
                     {
-                        foreach (var v in WebControl.NewVisits(_cfg.ChildUser)) _web.Url(v.Url, v.Browser, v.TimeMs);
+                        foreach (var v in WebControl.NewVisits(_cfg.ChildUser)) _web.Url(v.Url, v.Title, v.Browser, v.TimeMs);
                         lastHistory = now;
                     }
 
@@ -342,7 +342,7 @@ internal sealed class AgentService : BackgroundService
         var um = new Dictionary<string, object?>();
         foreach (var (key, v) in urls)
         {
-            um[key] = new Dictionary<string, object?> { ["u"] = v.Url, ["br"] = v.Browser, ["t"] = v.Time };
+            um[key] = new Dictionary<string, object?> { ["u"] = v.Url, ["ti"] = v.Title, ["br"] = v.Browser, ["t"] = v.Time };
             mask.Add($"urls.{Firebase.Seg(key)}");
         }
         if (um.Count > 0) fields["urls"] = um;
@@ -706,7 +706,7 @@ internal sealed class WebBuffer
         public bool Blocked;
     }
 
-    public sealed record Visit(string Url, string Browser, long Time);
+    public sealed record Visit(string Url, string Title, string Browser, long Time);
 
     private readonly Dictionary<string, Entry> _domains = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Visit> _urls = new();
@@ -724,13 +724,14 @@ internal sealed class WebBuffer
         }
     }
 
-    public void Url(string url, string browser, long timeMs)
+    public void Url(string url, string title, string browser, long timeMs)
     {
         var u = url.Length > 500 ? url[..500] : url;
+        var ti = title.Length > 300 ? title[..300] : title;
         var host = Domains.Normalize(u);
         lock (_gate)
         {
-            _urls[((uint)u.GetHashCode()).ToString("x")] = new Visit(u, browser, timeMs);
+            _urls[((uint)u.GetHashCode()).ToString("x")] = new Visit(u, ti, browser, timeMs);
             if (host != null)
             {
                 if (!_domains.TryGetValue(host, out var e)) _domains[host] = e = new Entry();

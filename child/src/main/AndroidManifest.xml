@@ -101,6 +101,16 @@
         </service>
 
         <service
+            android:name=".web.MediaListener"
+            android:exported="true"
+            android:label="Zemory Family Guard"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <service
             android:name=".enforce.GuardAccessibilityService"
             android:exported="false"
             android:label="Zemory Family Guard"

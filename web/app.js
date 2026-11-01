@@ -6,7 +6,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
   getFirestore, collection, query, where, orderBy, limit, onSnapshot, doc, updateDoc, addDoc,
-  deleteDoc, serverTimestamp, arrayUnion, arrayRemove, deleteField, FieldPath,
+  deleteDoc, serverTimestamp, arrayUnion, arrayRemove, deleteField, FieldPath, getDocs,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const $app = document.getElementById("app");
@@ -49,6 +49,18 @@ function openModal(html) {
   $modal.hidden = false;
 }
 function closeModal() { $modal.hidden = true; $modal.innerHTML = ""; }
+
+// In-page confirmation (window.confirm is silently ignored inside the Android parent app)
+function askConfirm(message, okText = "تأكيد", danger = false) {
+  return new Promise((resolve) => {
+    openModal(`<h2>تأكيد</h2><p style="white-space:pre-line;margin:0">${esc(message)}</p>
+      <div class="row"><span class="spacer"></span>
+        <button class="btn" id="cfNo">إلغاء</button>
+        <button class="btn ${danger ? "danger" : "primary"}" id="cfYes">${esc(okText)}</button></div>`);
+    document.getElementById("cfNo").onclick = () => { closeModal(); resolve(false); };
+    document.getElementById("cfYes").onclick = () => { closeModal(); resolve(true); };
+  });
+}
 $modal.addEventListener("click", (e) => { if (e.target === $modal || e.target.closest("[data-close]")) closeModal(); });
 async function sha256(text) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -93,6 +105,9 @@ function renderConfigForm() {
   };
 }
 
+// Used by the Android parent app ("forgot app PIN" signs the owner out)
+window.fgSignOut = () => { try { signOut(auth); } catch (_) {} };
+
 const config = loadConfig();
 if (!config) {
   renderConfigForm();
@@ -134,8 +149,10 @@ onAuthStateChanged(auth, (u) => {
   stopDetail();
   if (S.unsubDevices) { S.unsubDevices(); S.unsubDevices = null; }
   if (!u) { renderAuth(); return; }
-  $user.innerHTML = `<span>${esc(u.email)}</span><button class="btn sm ghost" id="logout">خروج</button>`;
+  $user.innerHTML = `<span>${esc(u.email)}</span>${window.ZemoryApp ? `<button class="btn sm ghost" id="appLock" title="قفل التطبيق">🔒</button>` : ""}<button class="btn sm ghost" id="logout">خروج</button>`;
   document.getElementById("logout").onclick = () => signOut(auth);
+  const lockBtn = document.getElementById("appLock");
+  if (lockBtn) lockBtn.onclick = () => window.ZemoryApp.openSecurity();
   S.unsubDevices = onSnapshot(
     query(collection(db, "devices"), where("ownerUid", "==", u.uid)),
     (qs) => {
@@ -255,6 +272,7 @@ function deviceIssues(d) {
   } else {
     if (st.accessibility === false) out.push(["إمكانية الوصول معطّلة", "danger"]);
     if (st.usageAccess === false) out.push(["بيانات الاستخدام معطّلة", "danger"]);
+    if (st.media === false) out.push(["سجل الفيديوهات غير مفعّل", "warn"]);
   }
   if (st.vpnNeeded && st.vpn === false) out.push(["فلتر المواقع متوقف", "danger"]);
   if (!st.deviceOwner && st.admin === false) out.push(["الحماية من الحذف غير مفعّلة", "warn"]);
@@ -279,7 +297,8 @@ function renderDevices() {
       const on = isOnline(d);
       return `<div class="card device-card" data-open="${esc(d.id)}">
         <div class="row"><span class="icon">${typeIcon(d.type)}</span><span class="spacer"></span>
-          <span class="badge ${on ? "ok" : ""}"><span class="dot"></span>${on ? "متصل" : "غير متصل"}</span></div>
+          <span class="badge ${on ? "ok" : ""}"><span class="dot"></span>${on ? "متصل" : "غير متصل"}</span>
+          <button class="btn sm ghost" data-del="${esc(d.id)}" title="حذف الجهاز">🗑</button></div>
         <b>${esc(d.name || "جهاز")}</b>
         <span class="muted small">${esc(d.model || "")} · ${esc(ago(tsMs(d.lastSeen)))}</span>
         <div class="row">${modeBadge(d)}${issueBadges(d)}</div>
@@ -287,7 +306,11 @@ function renderDevices() {
     }).join("")}
     <div class="card device-card add" id="addDevice"><span style="font-size:28px">＋</span><span>إضافة جهاز</span></div>
   </div>`;
-  $app.querySelectorAll("[data-open]").forEach((el) => (el.onclick = () => openDevice(el.dataset.open)));
+  $app.querySelectorAll("[data-open]").forEach((el) => (el.onclick = (e) => {
+    const del = e.target.closest("[data-del]");
+    if (del) { e.stopPropagation(); confirmDeleteDevice(del.dataset.del); return; }
+    openDevice(el.dataset.open);
+  }));
   document.getElementById("addDevice").onclick = showAddDevice;
 }
 
@@ -425,12 +448,14 @@ function renderDevice() {
     <span class="spacer"></span>
     <span class="badge ${on ? "ok" : ""}"><span class="dot"></span>${on ? "متصل" : "غير متصل"} · ${esc(ago(tsMs(d.lastSeen)))}</span>
   </div>
-  <h1 style="margin-top:12px">${typeIcon(d.type)} ${esc(d.name || "جهاز")}</h1>
+  <div class="row" style="margin-top:12px"><h1 style="margin:0">${typeIcon(d.type)} ${esc(d.name || "جهاز")}</h1><span class="spacer"></span>
+    <button class="btn sm danger" id="delTop">🗑 حذف الجهاز</button></div>
   <div class="row small muted">${esc(d.model || "")} · ${isPc(d) ? "Windows build" : "Android SDK"} ${esc(d.sdk ?? "?")} · التطبيق ${esc(d.appVersion || "?")}</div>
   <div class="row" style="margin-top:8px">${modeBadge(d)}${issueBadges(d)}</div>
   <nav class="tabs">${TABS.map(([k, t]) => `<button class="tab ${S.tab === k ? "active" : ""}" data-tab="${k}">${t}${k === "web" && S.requests.length ? ` <span class="count">${S.requests.length}</span>` : ""}</button>`).join("")}</nav>
   <section id="tabBody"></section>`;
   document.getElementById("back").onclick = () => { stopDetail(); S.deviceId = null; renderDevices(); };
+  document.getElementById("delTop").onclick = () => confirmDeleteDevice(d.id);
   $app.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; renderDevice(); }));
   const body = document.getElementById("tabBody");
   ({ apps: tabApps, time: tabTime, web: tabWeb, rules: tabRules, commands: tabCommands }[S.tab])(body);
@@ -526,7 +551,8 @@ function tabApps(el) {
     const pkg = b.closest("[data-pkg]").dataset.pkg;
     const label = appList().find((a) => a.pkg === pkg)?.label || pkg;
     if (b.dataset.act === "uninstall") {
-      if (confirm(`حذف «${label}» من الجهاز؟\nلتطبيقات النظام استخدم «إخفاء» بدلاً من الحذف.`)) sendCommand({ type: "uninstall", pkg }, "تم إرسال أمر الحذف");
+      askConfirm(`حذف «${label}» من الجهاز؟\nلتطبيقات النظام استخدم «إخفاء» بدلاً من الحذف.`, "حذف", true)
+        .then((ok) => ok && sendCommand({ type: "uninstall", pkg }, "تم إرسال أمر الحذف"));
     } else if (b.dataset.act === "enable") {
       sendCommand({ type: "enable_system_app", pkg }, "تم إرسال أمر إعادة التثبيت");
     }
@@ -625,6 +651,8 @@ function tabWeb(el) {
   if (S.hideSystemDomains) domains = domains.filter((d) => !SYSTEM_DOMAIN.test(d.name));
   domains.sort((a, b) => b.t - a.t);
   const urls = Object.values(data.urls || {}).sort((a, b) => (b.t || 0) - (a.t || 0));
+  const media = Object.values(data.media || {}).sort((a, b) => (b.t || 0) - (a.t || 0));
+  const ytLink = (m) => "https://www.youtube.com/results?search_query=" + encodeURIComponent(`${m.ti || ""} ${m.ch || ""}`.trim());
   const days = [...Array(7)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - i); return d; });
 
   const link = (u) => (/^[a-z]+:\/\//i.test(u) ? u : "https://" + u);
@@ -679,8 +707,13 @@ function tabWeb(el) {
       <label class="switch"><input type="checkbox" id="hideSys" ${S.hideSystemDomains ? "checked" : ""}>إخفاء نطاقات النظام</label>
     </div>
     ${S.web === null ? `<div class="empty">جارٍ التحميل…</div>` : ""}
+    ${media.length ? `<h3>🎬 فيديوهات ووسائط شوهدت (${media.length})</h3><div class="list">${media.slice(0, 200).map((m) => `
+      <div class="item domain-row"><span style="min-width:0">
+          <a href="${esc(/youtube/i.test(m.p || "") ? ytLink(m) : "https://www.google.com/search?q=" + encodeURIComponent(m.ti || ""))}" target="_blank" rel="noopener"><b>${esc(m.ti)}</b></a>
+          <div class="muted small">${esc(m.ch || "")}${m.ch ? " · " : ""}${esc(m.a || m.p || "")}</div></span>
+        <span class="muted small">${esc(fmtTime.format(new Date(m.t || 0)))}</span><span></span></div>`).join("")}</div>` : ""}
     ${urls.length ? `<h3>صفحات من المتصفح</h3><div class="list">${urls.slice(0, 100).map((u) => `
-      <div class="item domain-row"><a class="mono" href="${esc(link(u.u))}" target="_blank" rel="noopener" title="${esc(u.u)}">${esc(u.u)}</a><span class="muted small">${esc(fmtTime.format(new Date(u.t || 0)))}</span><span></span></div>`).join("")}</div>` : ""}
+      <div class="item domain-row"><span style="min-width:0">${u.ti ? `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.ti)}</div>` : ""}<a class="mono small" style="display:block" href="${esc(link(u.u))}" target="_blank" rel="noopener" title="${esc(u.u)}">${esc(u.u)}</a></span><span class="muted small">${esc(fmtTime.format(new Date(u.t || 0)))}</span><span></span></div>`).join("")}</div>` : ""}
     <h3>النطاقات (${domains.length})</h3>
     <div class="list">${domains.slice(0, 400).map((d) => {
       const isB = isBlockedDomain(d.name, blocked);
@@ -809,8 +842,12 @@ function tabRules(el) {
     run(updateDoc(devRef(), { "policy.pinHash": await sha256("fg:" + pin) }), "تم حفظ الرمز");
   };
   el.querySelectorAll("[data-rule]").forEach((i) => (i.onchange = () => {
-    if (i.dataset.rule === "no_debugging_features" && i.checked && !confirm("سيتم تعطيل adb على الجهاز. متابعة؟")) { i.checked = false; return; }
-    run(updateDoc(devRef(), new FieldPath("policy", "restrictions", i.dataset.rule), i.checked), "تم الحفظ");
+    const save = () => run(updateDoc(devRef(), new FieldPath("policy", "restrictions", i.dataset.rule), i.checked), "تم الحفظ");
+    if (i.dataset.rule === "no_debugging_features" && i.checked) {
+      askConfirm("سيتم تعطيل adb على الجهاز. متابعة؟", "متابعة", true).then((ok) => { if (ok) save(); else i.checked = false; });
+      return;
+    }
+    save();
   }));
 }
 
@@ -889,20 +926,41 @@ function tabCommands(el) {
     sendCommand({ type: "install", url }, "تم إرسال أمر التحديث");
   };
   el.querySelectorAll("[data-cmd]").forEach((b) => (b.onclick = () => {
-    if (b.dataset.cmd === "reboot" && !confirm("إعادة تشغيل الجهاز؟")) return;
+    if (b.dataset.cmd === "reboot") {
+      askConfirm("إعادة تشغيل الجهاز؟", "إعادة التشغيل").then((ok) => ok && sendCommand({ type: "reboot" }, "تم إرسال الأمر"));
+      return;
+    }
     sendCommand({ type: b.dataset.cmd }, "تم إرسال الأمر");
   }));
   document.getElementById("renameForm").onsubmit = (e) => {
     e.preventDefault();
     run(updateDoc(devRef(), { name: document.getElementById("devName").value.trim(), type: document.getElementById("devType").value }), "تم الحفظ");
   };
-  document.getElementById("delDevice").onclick = () => {
-    if (!confirm("حذف الجهاز من القائمة؟ لإزالة الحماية فعلياً استخدم «إزالة الحماية» من التطبيق على الجهاز.")) return;
-    const id = S.deviceId;
-    stopDetail();
-    S.deviceId = null;
-    run(deleteDoc(doc(db, "devices", id)), "تم الحذف");
-  };
+  document.getElementById("delDevice").onclick = () => confirmDeleteDevice(S.deviceId);
+}
+
+// Delete a device and its data (commands, apps, history, requests)
+async function confirmDeleteDevice(id) {
+  const d = S.devices.get(id);
+  if (!d) return;
+  const ok = await askConfirm(
+    `حذف «${d.name || "الجهاز"}» وكل بياناته من القائمة؟\nلإزالة الحماية من الجهاز نفسه استخدم «إزالة الحماية» داخل التطبيق على الجهاز.`,
+    "حذف الجهاز", true);
+  if (!ok) return;
+  if (S.deviceId === id) { stopDetail(); S.deviceId = null; }
+  toast("جارٍ الحذف…");
+  try {
+    for (const sub of ["commands", "meta", "web", "requests"]) {
+      const qs = await getDocs(collection(db, "devices", id, sub)).catch(() => null);
+      if (qs) await Promise.all(qs.docs.map((x) => deleteDoc(x.ref).catch(() => {})));
+    }
+    await deleteDoc(doc(db, "devices", id));
+    toast("تم حذف الجهاز");
+  } catch (e) {
+    console.error(e);
+    toast("خطأ: " + (e.code || e.message));
+  }
+  render();
 }
 
 // refresh "online" badges and relative times

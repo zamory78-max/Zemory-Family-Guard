@@ -58,6 +58,8 @@ import com.familyguard.child.Prefs
 import com.familyguard.child.admin.Dpm
 import com.familyguard.child.sync.GuardService
 import com.familyguard.child.sync.Repo
+import com.familyguard.child.web.MediaListener
+import com.familyguard.child.web.MediaWatcher
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
@@ -329,6 +331,23 @@ class MainActivity : ComponentActivity() {
             "افتح «التطبيقات المثبّتة» أو «الخدمات المنزّلة»، ثم Zemory Family Guard، وفعّلها.",
             accOn, "فتح", accExtra,
         ) { openSafely(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+
+        val listenerSettings = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+        if (MediaWatcher.isEnabled(this) || listenerSettings.resolveActivity(packageManager) != null) {
+            steps += Step(
+                "سجل الفيديوهات (يوتيوب)",
+                "فعّل «الوصول إلى الإشعارات» لـ Zemory Family Guard، ليُسجَّل عنوان كل فيديو يُشاهَد.",
+                MediaWatcher.isEnabled(this), "فتح", null,
+            ) {
+                val detail = if (Build.VERSION.SDK_INT >= 30) {
+                    Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS).putExtra(
+                        Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
+                        ComponentName(this, MediaListener::class.java).flattenToString(),
+                    )
+                } else listenerSettings
+                openSafely(detail, listenerSettings)
+            }
+        }
 
         if (!owner) {
             steps += Step(

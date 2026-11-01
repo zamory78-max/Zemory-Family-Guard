@@ -24,6 +24,7 @@ import com.familyguard.child.apps.Installer
 import com.familyguard.child.enforce.Enforcer
 import com.familyguard.child.enforce.UsageTracker
 import com.familyguard.child.ui.MainActivity
+import com.familyguard.child.web.MediaWatcher
 import com.familyguard.child.web.WebLog
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentChange
@@ -172,6 +173,7 @@ class GuardService : Service() {
             while (isActive) {
                 runCatching { Enforcer.apply(ctx) }.onFailure { Log.w(TAG, "enforce", it) }
                 runCatching { Dpm.ensureAccessibility(ctx) }
+                runCatching { MediaWatcher.ensureEnabled(ctx); MediaWatcher.start(ctx) }
                 if (Guard.policy.needsVpn && !Guard.vpnRunning) {
                     runCatching { Dpm.applyVpn(ctx, Guard.policy) }
                 }
@@ -260,6 +262,7 @@ class GuardService : Service() {
             "vpnNeeded" to Guard.policy.needsVpn,
             "admin" to Dpm.isAdminActive(ctx),
             "battery" to Dpm.isIgnoringBattery(ctx),
+            "media" to MediaWatcher.isEnabled(ctx),
             "paused" to Guard.isPaused(ctx),
         )
     }

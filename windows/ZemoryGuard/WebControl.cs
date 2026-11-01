@@ -253,7 +253,7 @@ internal static class WebControl
 
     // ---------------- History: browser databases ----------------
 
-    public sealed record Visit(string Url, string Browser, long TimeMs);
+    public sealed record Visit(string Url, string Title, string Browser, long TimeMs);
 
     private static readonly Dictionary<string, long> LastVisit = new();
 
@@ -316,13 +316,13 @@ internal static class WebControl
                     using var cmd = con.CreateCommand();
                     if (firefox)
                     {
-                        cmd.CommandText = "SELECT p.url, v.visit_date FROM moz_historyvisits v JOIN moz_places p ON p.id = v.place_id " +
+                        cmd.CommandText = "SELECT p.url, v.visit_date, IFNULL(p.title, '') FROM moz_historyvisits v JOIN moz_places p ON p.id = v.place_id " +
                                           "WHERE v.visit_date > $t ORDER BY v.visit_date DESC LIMIT 300";
                         cmd.Parameters.AddWithValue("$t", since * 1000);
                     }
                     else
                     {
-                        cmd.CommandText = "SELECT url, last_visit_time FROM urls WHERE last_visit_time > $t ORDER BY last_visit_time DESC LIMIT 300";
+                        cmd.CommandText = "SELECT url, last_visit_time, IFNULL(title, '') FROM urls WHERE last_visit_time > $t ORDER BY last_visit_time DESC LIMIT 300";
                         cmd.Parameters.AddWithValue("$t", (since + 11644473600000L) * 1000);
                     }
                     using var r = cmd.ExecuteReader();
@@ -330,9 +330,10 @@ internal static class WebControl
                     {
                         var url = r.GetString(0);
                         var raw = r.GetInt64(1);
+                        var title = r.IsDBNull(2) ? "" : r.GetString(2);
                         var ms = firefox ? raw / 1000 : raw / 1000 - 11644473600000L;
                         if (ms > newest) newest = ms;
-                        if (url.StartsWith("http", StringComparison.OrdinalIgnoreCase)) result.Add(new Visit(url, browser, ms));
+                        if (url.StartsWith("http", StringComparison.OrdinalIgnoreCase)) result.Add(new Visit(url, title, browser, ms));
                     }
                 }
                 LastVisit[db] = newest;
