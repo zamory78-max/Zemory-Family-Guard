@@ -13,3 +13,5 @@ dist/
 keystore/
 *.jks
 *.keystore
+windows/ZemoryGuard/bin/
+windows/ZemoryGuard/obj/

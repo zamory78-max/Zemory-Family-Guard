@@ -125,7 +125,8 @@ const devRef = (id = S.deviceId) => doc(db, "devices", id);
 const dev = () => S.devices.get(S.deviceId);
 const pol = () => (dev() && dev().policy) || {};
 const isOnline = (d) => Date.now() - tsMs(d.lastSeen) < 8 * 60 * 1000;
-const typeIcon = (t) => ({ tv: "📺", tablet: "💻" }[t] || "📱");
+const typeIcon = (t) => ({ tv: "📺", tablet: "💻", pc: "🖥️" }[t] || "📱");
+const isPc = (d) => !!d && (d.type === "pc" || (d.status && d.status.platform === "windows"));
 
 // ---------- auth ----------
 onAuthStateChanged(auth, (u) => {
@@ -249,8 +250,12 @@ function deviceIssues(d) {
   const out = [];
   const seen = tsMs(d.lastSeen);
   if (seen && Date.now() - seen > OFFLINE_ALERT_MS) out.push([`انقطع ${ago(seen)}`, "danger"]);
-  if (st.accessibility === false) out.push(["إمكانية الوصول معطّلة", "danger"]);
-  if (st.usageAccess === false) out.push(["بيانات الاستخدام معطّلة", "danger"]);
+  if (isPc(d)) {
+    if (st.accessibility === false) out.push(["المراقبة في جلسة الطفل متوقفة", "danger"]);
+  } else {
+    if (st.accessibility === false) out.push(["إمكانية الوصول معطّلة", "danger"]);
+    if (st.usageAccess === false) out.push(["بيانات الاستخدام معطّلة", "danger"]);
+  }
   if (st.vpnNeeded && st.vpn === false) out.push(["فلتر المواقع متوقف", "danger"]);
   if (!st.deviceOwner && st.admin === false) out.push(["الحماية من الحذف غير مفعّلة", "warn"]);
   if (st.battery === false) out.push(["قد يوقفه توفير البطارية", "warn"]);
@@ -260,7 +265,7 @@ function deviceIssues(d) {
 }
 const deviceWarnings = (d) => deviceIssues(d).map(([t]) => t);
 const issueBadges = (d) => deviceIssues(d).map(([t, c]) => `<span class="badge ${c}">${esc(t)}</span>`).join("");
-const modeBadge = (d) => (d.status && d.status.deviceOwner)
+const modeBadge = (d) => isPc(d) ? `<span class="badge ok">خدمة ويندوز</span>` : (d.status && d.status.deviceOwner)
   ? `<span class="badge ok">حماية كاملة</span>` : `<span class="badge">حماية عادية</span>`;
 
 function renderDevices() {
@@ -327,7 +332,7 @@ function showAddDevice() {
     <form class="stack" id="addForm">
       <label class="field"><span>اسم الجهاز</span><input class="input" id="dName" required maxlength="40" placeholder="هاتف أحمد"></label>
       <label class="field"><span>النوع</span>
-        <select class="input" id="dType"><option value="phone">📱 هاتف</option><option value="tablet">💻 تابلت</option><option value="tv">📺 تلفاز</option></select></label>
+        <select class="input" id="dType"><option value="phone">📱 هاتف</option><option value="tablet">💻 تابلت</option><option value="tv">📺 تلفاز</option><option value="pc">🖥️ كمبيوتر ويندوز</option></select></label>
       <label class="field"><span>بريد الجهاز</span><input class="input mono" id="dEmail" type="email" required dir="ltr" autocomplete="off"></label>
       <label class="field"><span>كلمة مرور الجهاز (6 أحرف على الأقل)</span><input class="input mono" id="dPass" type="text" required minlength="6" dir="ltr" autocomplete="off"></label>
       <div class="row"><span class="spacer"></span><button class="btn" type="button" data-close>إلغاء</button><button class="btn primary" type="submit" id="dSave">إنشاء</button></div>
@@ -352,6 +357,22 @@ function showAddDevice() {
           name, type, createdAt: serverTimestamp(), policy: DEFAULT_POLICY,
         });
         id = ref.id;
+      }
+      if (type === "pc") {
+        openModal(`
+        <h2>✅ تم إنشاء «${esc(name)}»</h2>
+        <ol class="small" style="padding-inline-start:18px;margin:0">
+          <li>على الكمبيوتر: أنشئ للطفل حساب ويندوز <b>عادي (ليس مسؤولاً)</b> إن لم يكن موجوداً.</li>
+          <li>من حساب المسؤول نزّل <b>ZemoryGuard-Windows.zip</b> من صفحة الإصدارات وفك الضغط.</li>
+          <li>كليك يمين على <b>install.bat</b> ← <b>تشغيل كمسؤول</b>، واكتب:</li>
+        </ol>
+        <pre class="code">${esc(email)}\n${esc(pass)}</pre>
+        <ol class="small" start="4" style="padding-inline-start:18px;margin:0">
+          <li>اكتب اسم حساب الطفل في ويندوز عندما يُطلب منك.</li>
+          <li>عيّن <b>رمز المالك</b> من صفحة الجهاز ← القيود والإعدادات.</li>
+        </ol>
+        <div class="row"><span class="spacer"></span><button class="btn primary" data-close>تم</button></div>`);
+        return;
       }
       openModal(`
         <h2>✅ تم إنشاء «${esc(name)}»</h2>
@@ -405,7 +426,7 @@ function renderDevice() {
     <span class="badge ${on ? "ok" : ""}"><span class="dot"></span>${on ? "متصل" : "غير متصل"} · ${esc(ago(tsMs(d.lastSeen)))}</span>
   </div>
   <h1 style="margin-top:12px">${typeIcon(d.type)} ${esc(d.name || "جهاز")}</h1>
-  <div class="row small muted">${esc(d.model || "")} · Android SDK ${esc(d.sdk ?? "?")} · التطبيق ${esc(d.appVersion || "?")}</div>
+  <div class="row small muted">${esc(d.model || "")} · ${isPc(d) ? "Windows build" : "Android SDK"} ${esc(d.sdk ?? "?")} · التطبيق ${esc(d.appVersion || "?")}</div>
   <div class="row" style="margin-top:8px">${modeBadge(d)}${issueBadges(d)}</div>
   <nav class="tabs">${TABS.map(([k, t]) => `<button class="tab ${S.tab === k ? "active" : ""}" data-tab="${k}">${t}${k === "web" && S.requests.length ? ` <span class="count">${S.requests.length}</span>` : ""}</button>`).join("")}</nav>
   <section id="tabBody"></section>`;
@@ -472,7 +493,7 @@ function tabApps(el) {
           <label class="limit">حد يومي <input class="input" type="number" min="0" step="5" inputmode="numeric" data-act="limit" value="${esc(lim)}" placeholder="—"> د</label>
           <label class="switch"><input type="checkbox" data-act="blocked" ${blocked.has(a.pkg) ? "checked" : ""}>حظر</label>
           <label class="switch"><input type="checkbox" data-act="pinLocked" ${pinned.has(a.pkg) ? "checked" : ""}>قفل برمز</label>
-          <label class="switch"><input type="checkbox" data-act="hidden" ${hidden.has(a.pkg) ? "checked" : ""}>إخفاء</label>
+          ${isPc(dev()) ? "" : `<label class="switch"><input type="checkbox" data-act="hidden" ${hidden.has(a.pkg) ? "checked" : ""}>إخفاء</label>`}
           <span class="spacer"></span>
           ${a.installed
             ? `<button class="btn sm danger" data-act="uninstall">حذف</button>`
@@ -741,10 +762,22 @@ const RULES = [
   ["no_debugging_features", "منع خيارات المطوّر و adb", "⚠️ بعد تفعيله لن تستطيع استخدام adb على الجهاز حتى تلغيه من هنا."],
 ];
 
+const WIN_RULES = [
+  ["win_no_taskmgr", "منع مدير المهام", "يمنع إغلاق البرامج أو الحماية من مدير المهام."],
+  ["win_no_settings", "منع الإعدادات ولوحة التحكم", ""],
+  ["win_no_regedit", "منع محرر السجل (regedit)", ""],
+  ["win_no_cmd", "منع موجه الأوامر (cmd)", ""],
+  ["win_no_run", "منع نافذة «تشغيل» (Win+R)", ""],
+  ["win_no_store", "منع متجر مايكروسوفت", "يعمل في إصدارات ويندوز Pro / Enterprise / Education."],
+  ["win_no_msi", "منع تثبيت برامج MSI للمستخدم", ""],
+  ["win_no_usb_storage", "منع الفلاشات وأقراص USB", "يطبّق على كل الحسابات."],
+];
+
 function tabRules(el) {
   const p = pol();
   const r = p.restrictions || {};
   const full = !!(dev().status && dev().status.deviceOwner);
+  const pc = isPc(dev());
   el.innerHTML = `
   <div class="cols">
     <div class="card stack">
@@ -758,11 +791,15 @@ function tabRules(el) {
     </div>
     <div class="card">
       <h2>القيود على الجهاز</h2>
+      ${pc ? `<p class="small muted">تُطبَّق على حساب الطفل في ويندوز. يجب أن يكون حساب الطفل «مستخدماً عادياً» وليس مسؤولاً.</p>
+      ${WIN_RULES.map(([k, t, h]) => `
+        <div class="setting"><div class="txt"><b>${esc(t)}</b>${h ? `<span class="small muted">${esc(h)}</span>` : ""}</div>
+          <label class="switch"><input type="checkbox" data-rule="${k}" ${r[k] ? "checked" : ""}></label></div>`).join("")}` : `
       ${full ? `<p class="small muted">الجهاز في «حماية كاملة»: كل القيود تعمل.</p>`
         : `<p class="notice">الجهاز في «حماية عادية»: القيود المعلّمة بـ «تحتاج حماية كاملة» لا يطبّقها أندرويد. فعّل الحماية الكاملة عبر الكمبيوتر لتعمل كلها.</p>`}
       ${RULES.map(([k, t, h]) => `
         <div class="setting"><div class="txt"><b>${esc(t)}</b>${!full && !RULES_NORMAL.has(k) ? ` <span class="badge warn">تحتاج حماية كاملة</span>` : ""}${h ? `<span class="small muted">${esc(h)}</span>` : ""}</div>
-          <label class="switch"><input type="checkbox" data-rule="${k}" ${r[k] ? "checked" : ""}></label></div>`).join("")}
+          <label class="switch"><input type="checkbox" data-rule="${k}" ${r[k] ? "checked" : ""}></label></div>`).join("")}`}
     </div>
   </div>`;
   document.getElementById("pinForm").onsubmit = async (e) => {
@@ -783,24 +820,25 @@ const STATUS_BADGE = { pending: ["", "بالانتظار"], running: ["warn", "�
 
 function tabCommands(el) {
   const d = dev();
+  const pc = isPc(d);
   el.innerHTML = `
   <div class="cols">
     <div class="stack">
       <div class="card stack">
-        <h2>تثبيت تطبيق</h2>
-        <p class="small muted">ضع رابطاً مباشراً لملف APK. يُثبَّت بصمت عندما يكون التطبيق «مالك الجهاز».</p>
+        <h2>${pc ? "تثبيت برنامج" : "تثبيت تطبيق"}</h2>
+        <p class="small muted">${pc ? "ضع رابطاً مباشراً لملف MSI (تثبيت صامت) أو EXE (يُشغَّل بالخيار /S)." : "ضع رابطاً مباشراً لملف APK. يُثبَّت بصمت عندما يكون التطبيق «مالك الجهاز»."}</p>
         <form class="row" id="installForm">
-          <input class="input mono" id="apkUrl" type="url" placeholder="https://…/app.apk" style="flex:1;min-width:180px" required>
+          <input class="input mono" id="apkUrl" type="url" placeholder="${pc ? "https://…/setup.msi" : "https://…/app.apk"}" style="flex:1;min-width:180px" required>
           <button class="btn primary" type="submit">تثبيت</button>
         </form>
       </div>
-      <div class="card stack">
+      ${pc ? "" : `<div class="card stack">
         <h2>تحديث تطبيق الجهاز</h2>
         <form class="row" id="selfForm">
           <input class="input mono" id="selfUrl" type="url" value="${esc(childApkUrl())}" placeholder="رابط FamilyGuard-Child.apk" style="flex:1;min-width:180px" required>
           <button class="btn" type="submit">تحديث</button>
         </form>
-      </div>
+      </div>`}
       <div class="card stack">
         <h2>أوامر سريعة</h2>
         <div class="row">
@@ -817,6 +855,7 @@ function tabCommands(el) {
             <option value="phone" ${d.type === "phone" ? "selected" : ""}>📱 هاتف</option>
             <option value="tablet" ${d.type === "tablet" ? "selected" : ""}>💻 تابلت</option>
             <option value="tv" ${d.type === "tv" ? "selected" : ""}>📺 تلفاز</option>
+            <option value="pc" ${d.type === "pc" ? "selected" : ""}>🖥️ كمبيوتر ويندوز</option>
           </select>
           <button class="btn" type="submit">حفظ</button>
         </form>
@@ -842,7 +881,8 @@ function tabCommands(el) {
     e.preventDefault();
     sendCommand({ type: "install", url: document.getElementById("apkUrl").value.trim() }, "تم إرسال أمر التثبيت");
   };
-  document.getElementById("selfForm").onsubmit = (e) => {
+  const selfForm = document.getElementById("selfForm");
+  if (selfForm) selfForm.onsubmit = (e) => {
     e.preventDefault();
     const url = document.getElementById("selfUrl").value.trim();
     try { localStorage.setItem("fg_apk", url); } catch (_) {}

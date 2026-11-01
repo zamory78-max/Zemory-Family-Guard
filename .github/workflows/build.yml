@@ -109,15 +109,73 @@ jobs:
           name: hosting
           path: dist/hosting
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Firebase configuration from secrets
+        shell: pwsh
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if (-not $env:GOOGLE_SERVICES_JSON) { Write-Error "Missing GOOGLE_SERVICES_JSON secret"; exit 1 }
+          $j = $env:GOOGLE_SERVICES_JSON | ConvertFrom-Json
+          $apiKey = $j.client[0].api_key[0].current_key
+          $projectId = $j.project_info.project_id
+          $code = @"
+          namespace ZemoryGuard;
+          internal static class FirebaseConfig
+          {
+              public const string ApiKey = "$apiKey";
+              public const string ProjectId = "$projectId";
+          }
+          "@
+          Set-Content -Path windows/ZemoryGuard/FirebaseConfig.Generated.cs -Value $code -Encoding utf8
+
+      - name: Build Windows agent
+        run: dotnet publish windows/ZemoryGuard/ZemoryGuard.csproj -c Release -o out
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force pkg | Out-Null
+          Copy-Item out/ZemoryGuard.exe pkg/
+          Copy-Item windows/install.bat, windows/uninstall.bat pkg/
+          Compress-Archive -Path pkg/* -DestinationPath ZemoryGuard-Windows.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FamilyGuard-Windows
+          path: ZemoryGuard-Windows.zip
+
+  release:
+    needs: [build, windows]
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: FamilyGuard-APKs
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: FamilyGuard-Windows
+          path: dist
+
       - name: Publish "latest" release
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete latest --yes --cleanup-tag || true
-          gh release create latest dist/FamilyGuard-Child.apk dist/FamilyGuard-Parent.apk \
+          gh release delete latest -R "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create latest -R "$GITHUB_REPOSITORY" dist/FamilyGuard-Child.apk dist/FamilyGuard-Parent.apk dist/ZemoryGuard-Windows.zip \
             --title "Zemory Family Guard — آخر إصدار (build ${GITHUB_RUN_NUMBER})" \
-            --notes "FamilyGuard-Child.apk: يُثبَّت على أجهزة الأطفال (هاتف/تابلت/تلفاز). FamilyGuard-Parent.apk: تطبيق الوالد." \
+            --notes "FamilyGuard-Child.apk: أجهزة الأطفال (هاتف/تابلت/تلفاز). FamilyGuard-Parent.apk: تطبيق المالك. ZemoryGuard-Windows.zip: كمبيوتر ويندوز (فك الضغط وشغّل install.bat كمسؤول)." \
             --target "$GITHUB_SHA" --latest
 
       - name: Publish versioned release
@@ -125,7 +183,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/FamilyGuard-Child.apk dist/FamilyGuard-Parent.apk \
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" dist/FamilyGuard-Child.apk dist/FamilyGuard-Parent.apk dist/ZemoryGuard-Windows.zip \
             --title "$GITHUB_REF_NAME" --generate-notes
 
   deploy:
