@@ -282,7 +282,7 @@ function deviceIssues(d) {
   }
   if (st.vpnNeeded && st.vpn === false) out.push(["فلتر المواقع متوقف", "danger"]);
   if (!st.deviceOwner && st.admin === false) out.push(["الحماية من الحذف غير مفعّلة", "warn"]);
-  if (st.battery === false) out.push(["قد يوقفه توفير البطارية", "warn"]);
+  if (st.battery === false && d.type !== "tv") out.push(["قد يوقفه توفير البطارية", "warn"]);
   if (!(d.policy && d.policy.pinHash)) out.push(["لم يُعيَّن رمز المالك", "warn"]);
   if (st.paused) out.push(["متوقف مؤقتاً", "warn"]);
   return out;
