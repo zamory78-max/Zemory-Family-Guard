@@ -128,6 +128,7 @@ const S = {
   webDay: dayKey(),
   web: null,
   requests: [],
+  events: [],
   search: "",
   appFilter: "user",
   hideSystemDomains: true,
@@ -224,6 +225,11 @@ function openDevice(id) {
       .sort((a, b) => tsMs(b.ts) - tsMs(a.ts));
     renderDevice();
   }));
+  S.events = [];
+  S.unsubDetail.push(onSnapshot(
+    query(collection(db, "devices", id, "events"), orderBy("t", "desc"), limit(200)),
+    (qs) => { S.events = qs.docs.map((d) => ({ id: d.id, ...d.data() })); if (S.tab === "reports") renderDevice(); },
+  ));
   listenWeb();
   renderDevice();
   window.scrollTo(0, 0);
@@ -321,9 +327,9 @@ const DEFAULT_POLICY = {
     no_factory_reset: true, no_add_user: true, no_safe_boot: true, no_install_unknown_sources: true,
     no_config_date_time: true, no_control_apps: true, lock_settings: true, lock_youtube_settings: true,
   },
-  web: { filter: false, log: true, safeSearch: false, blocked: [] },
+  web: { filter: false, log: true, safeSearch: false, blocked: [], allowOnly: false, allowed: [], blockedPaths: [] },
   bedtime: { enabled: false, start: "21:00", end: "07:00", allowed: [] },
-  pauseAll: false,
+  pauseAll: false, lockNow: false, overrideMinutes: 30, unlockMinutes: 10,
 };
 
 // A second Firebase app instance so creating the child's account does not sign the parent out
@@ -429,6 +435,8 @@ const TABS = [
   ["apps", "التطبيقات"],
   ["time", "الوقت"],
   ["web", "المواقع"],
+  ["requests", "طلبات الطفل"],
+  ["reports", "التقارير"],
   ["rules", "القيود والإعدادات"],
   ["commands", "تثبيت وأوامر"],
 ];
@@ -452,13 +460,13 @@ function renderDevice() {
     <button class="btn sm danger" id="delTop">🗑 حذف الجهاز</button></div>
   <div class="row small muted">${esc(d.model || "")} · ${isPc(d) ? "Windows build" : "Android SDK"} ${esc(d.sdk ?? "?")} · التطبيق ${esc(d.appVersion || "?")}</div>
   <div class="row" style="margin-top:8px">${modeBadge(d)}${issueBadges(d)}</div>
-  <nav class="tabs">${TABS.map(([k, t]) => `<button class="tab ${S.tab === k ? "active" : ""}" data-tab="${k}">${t}${k === "web" && S.requests.length ? ` <span class="count">${S.requests.length}</span>` : ""}</button>`).join("")}</nav>
+  <nav class="tabs">${TABS.map(([k, t]) => `<button class="tab ${S.tab === k ? "active" : ""}" data-tab="${k}">${t}${k === "requests" && S.requests.length ? ` <span class="count">${S.requests.length}</span>` : ""}</button>`).join("")}</nav>
   <section id="tabBody"></section>`;
   document.getElementById("back").onclick = () => { stopDetail(); S.deviceId = null; renderDevices(); };
   document.getElementById("delTop").onclick = () => confirmDeleteDevice(d.id);
   $app.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; renderDevice(); }));
   const body = document.getElementById("tabBody");
-  ({ apps: tabApps, time: tabTime, web: tabWeb, rules: tabRules, commands: tabCommands }[S.tab])(body);
+  ({ apps: tabApps, time: tabTime, web: tabWeb, requests: tabRequests, reports: tabReports, rules: tabRules, commands: tabCommands }[S.tab])(body);
 
   if (keepSearch) {
     const s = document.getElementById("search");
@@ -585,7 +593,11 @@ function tabTime(el) {
     <div class="stack">
       <div class="card">
         <div class="setting">
-          <div class="txt"><b>⏸ إيقاف كل التطبيقات الآن</b><span class="small muted">يوقف كل التطبيقات (ما عدا المسموح بها أدناه) حتى تلغي الإيقاف.</span></div>
+          <div class="txt"><b>🔒 قفل الشاشة بالكامل الآن</b><span class="small muted">يقفل شاشة الجهاز فوراً حتى تلغيه، ولا يستطيع الطفل فتح أي شيء.</span></div>
+          <label class="switch"><input type="checkbox" id="lockNow" ${p.lockNow ? "checked" : ""}></label>
+        </div>
+        <div class="setting">
+          <div class="txt"><b>⏸ إيقاف كل التطبيقات الآن</b><span class="small muted">يوقف كل التطبيقات (ما عدا المسموح بها أدناه)، لكن الشاشة تبقى تعمل.</span></div>
           <label class="switch"><input type="checkbox" id="pauseAll" ${p.pauseAll ? "checked" : ""}></label>
         </div>
       </div>
@@ -607,6 +619,7 @@ function tabTime(el) {
       </div>
     </div>
   </div>`;
+  document.getElementById("lockNow").onchange = (e) => run(updateDoc(devRef(), { "policy.lockNow": e.target.checked }), e.target.checked ? "تم قفل الشاشة" : "تم رفع القفل");
   document.getElementById("pauseAll").onchange = (e) => run(updateDoc(devRef(), { "policy.pauseAll": e.target.checked }), e.target.checked ? "تم إيقاف التطبيقات" : "تم الاستئناف");
   document.getElementById("bedOn").onchange = (e) => run(updateDoc(devRef(), { "policy.bedtime.enabled": e.target.checked }), "تم الحفظ");
   document.getElementById("bedStart").onchange = (e) => run(updateDoc(devRef(), { "policy.bedtime.start": e.target.value }), "تم الحفظ");
@@ -641,6 +654,93 @@ function isBlockedDomain(name, set) {
   return false;
 }
 
+// favicon via DuckDuckGo (privacy-friendly, no tracking of the child)
+const favicon = (host) => `https://icons.duckduckgo.com/ip3/${encodeURIComponent(host)}.ico`;
+const favImg = (host) => host ? `<img class="fav" src="${esc(favicon(host))}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : "";
+const hostOfUrl = (u) => { try { return new URL(/^[a-z]+:\/\//i.test(u) ? u : "https://" + u).hostname.replace(/^www\./, ""); } catch (_) { return normDomain(u) || ""; } }
+const pageOfUrl = (u) => u.replace(/^[a-z]+:\/\//i, "").replace(/^www\./, "").replace(/\/+$/, "");
+
+// shared block / allow actions (used by the web tab and the requests tab)
+const blockSite = (host) => { const d = normDomain(host); if (d) run(updateDoc(devRef(), { "policy.web.blocked": arrayUnion(d), "policy.web.allowed": arrayRemove(d) }), `تم حظر ${d}`); };
+const allowSite = (host) => { const d = normDomain(host); if (d) run(updateDoc(devRef(), { "policy.web.allowed": arrayUnion(d), "policy.web.blocked": arrayRemove(d) }), `تم السماح بـ ${d}`); };
+const blockPage = (url) => { const pg = pageOfUrl(url); if (pg) run(updateDoc(devRef(), { "policy.web.blockedPaths": arrayUnion(pg) }), "تم حظر هذه الصفحة"); };
+function unblockSite(d, blocked) {
+  const toRemove = [...blocked].filter((x) => x === d || isBlockedDomain(d, new Set([x])));
+  run(updateDoc(devRef(), { "policy.web.blocked": arrayRemove(...(toRemove.length ? toRemove : [d])) }), "تم إلغاء الحظر");
+}
+function approveRequest(id) {
+  const q = S.requests.find((x) => x.id === id);
+  const d = q && normDomain(q.domain);
+  if (!d) return;
+  run(Promise.all([
+    updateDoc(devRef(), { "policy.web.allowed": arrayUnion(d), "policy.web.blocked": arrayRemove(d) }),
+    updateDoc(doc(db, "devices", S.deviceId, "requests", q.id), { status: "approved", doneAt: serverTimestamp() }),
+  ]), `تم السماح بـ ${d}`);
+}
+const rejectRequest = (id) =>
+  run(updateDoc(doc(db, "devices", S.deviceId, "requests", id), { status: "rejected", doneAt: serverTimestamp() }), "تم الرفض");
+
+// ----- tab: requests -----
+function tabRequests(el) {
+  const link = (u) => (/^[a-z]+:\/\//i.test(u) ? u : "https://" + u);
+  el.innerHTML = `
+  <div class="card stack">
+    <h2>📨 طلبات الطفل للسماح بمواقع</h2>
+    <p class="small muted" style="margin:0">عندما يُمنع موقع، يستطيع الطفل إرسال طلب من جهازه. توافق أو ترفض من هنا. الموافقة تضيف الموقع إلى «المواقع المسموحة».</p>
+    ${S.requests.length ? `<div class="list">${S.requests.map((q) => `
+      <div class="item domain-row">
+        <span style="min-width:0;display:flex;align-items:center;gap:8px">${favImg(q.domain)}
+          <span style="min-width:0"><a class="mono" href="${esc(link(q.url || q.domain))}" target="_blank" rel="noopener" title="${esc(q.url || "")}">${esc(q.domain)}</a>
+          <div class="muted small">${q.ts ? esc(fmtDate.format(new Date(tsMs(q.ts)))) + " · " + esc(fmtTime.format(new Date(tsMs(q.ts)))) : ""}</div></span></span>
+        <button class="btn sm primary" data-approve="${esc(q.id)}">سماح</button>
+        <button class="btn sm" data-reject="${esc(q.id)}">رفض</button>
+      </div>`).join("")}</div>` : `<div class="empty">لا توجد طلبات حالياً</div>`}
+  </div>`;
+  el.querySelectorAll("[data-approve]").forEach((b) => (b.onclick = () => approveRequest(b.dataset.approve)));
+  el.querySelectorAll("[data-reject]").forEach((b) => (b.onclick = () => rejectRequest(b.dataset.reject)));
+}
+
+// ----- tab: reports -----
+const EV = {
+  block: ["⛔", "حظر تطبيق"], web: ["🚫", "موقع محظور"], unlock: ["🔓", "سماح برمز المالك"],
+  tamper: ["⚠️", "تغيّر في الحماية"], safemode: ["🟠", "الوضع الآمن"], boot: ["🔄", "تشغيل الجهاز"], hold: ["🔒", "قفل الشاشة"],
+};
+function tabReports(el) {
+  const d = dev();
+  const usage = usageIsToday() ? appList().filter((a) => a.usage > 0).sort((a, b) => b.usage - a.usage) : [];
+  const total = usage.reduce((s, a) => s + a.usage, 0);
+  const data = S.web || {};
+  let doms = Object.entries(data.domains || {}).map(([name, v]) => ({ name, c: v.c || 0, b: !!v.b }));
+  doms = doms.filter((x) => !SYSTEM_DOMAIN.test(x.name));
+  const blockedHits = doms.filter((x) => x.b);
+  const evs = S.events || [];
+  const safeCount = evs.filter((e) => e.type === "safemode").length;
+  const tamperCount = evs.filter((e) => e.type === "tamper" && e.detail === "off").length;
+
+  el.innerHTML = `
+  <div class="cols">
+    <div class="card stack">
+      <h2>ملخص اليوم</h2>
+      <div class="bar-row"><span>وقت الاستخدام الكلي</span><div></div><span class="usage">${mins(total)}</span></div>
+      <div class="bar-row"><span>مواقع مميّزة زارها</span><div></div><span class="usage">${doms.length}</span></div>
+      <div class="bar-row"><span>محاولات مواقع محظورة</span><div></div><span class="usage">${blockedHits.length}</span></div>
+      ${safeCount ? `<div class="notice" style="background:var(--warn-soft);color:var(--warn)">🟠 دخل الوضع الآمن ${safeCount} مرة — راجع السجل أدناه.</div>` : ""}
+      ${tamperCount ? `<div class="notice">⚠️ تعطّلت صلاحيات حماية ${tamperCount} مرة.</div>` : ""}
+      <h3>أكثر التطبيقات استخداماً اليوم</h3>
+      ${usage.length ? usage.slice(0, 8).map((a) => `<div class="bar-row"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.label)}</span><div></div><span class="usage">${mins(a.usage)}</span></div>`).join("") : `<div class="empty">لا توجد بيانات بعد</div>`}
+    </div>
+    <div class="card stack">
+      <h2>سجل الأحداث</h2>
+      <p class="small muted" style="margin:0">آخر ما حدث على الجهاز: المنع، السماح، تعطّل الحماية، الوضع الآمن، التشغيل.</p>
+      ${evs.length ? `<div class="list">${evs.slice(0, 120).map((e) => {
+        const [ic, def] = EV[e.type] || ["•", e.type];
+        const extra = e.type === "tamper" ? (e.detail === "off" ? " — توقّفت" : " — عادت") : (e.type === "unlock" ? " (" + esc(e.detail || "") + ")" : "");
+        return `<div class="item"><div class="row"><span>${ic}</span><b style="margin:0 6px">${esc(def)}</b><span class="muted small">${esc(e.label || "")}${extra}</span><span class="spacer"></span><span class="muted small">${e.t ? esc(fmtTime.format(new Date(e.t))) : ""}</span></div></div>`;
+      }).join("")}</div>` : `<div class="empty">لا توجد أحداث بعد</div>`}
+    </div>
+  </div>`;
+}
+
 function tabWeb(el) {
   const p = pol();
   const web = p.web || {};
@@ -657,16 +757,7 @@ function tabWeb(el) {
 
   const link = (u) => (/^[a-z]+:\/\//i.test(u) ? u : "https://" + u);
   el.innerHTML = `
-  ${S.requests.length ? `<div class="card stack" style="margin-bottom:12px;border-color:var(--primary)">
-    <h2>📨 طلبات السماح بمواقع (${S.requests.length})</h2>
-    <div class="list">${S.requests.map((q) => `
-      <div class="item domain-row">
-        <span style="min-width:0"><a class="mono" href="${esc(link(q.url || q.domain))}" target="_blank" rel="noopener" title="${esc(q.url || "")}">${esc(q.domain)}</a>
-          <span class="muted small"> · ${q.ts ? esc(fmtTime.format(new Date(tsMs(q.ts)))) : ""}</span></span>
-        <button class="btn sm primary" data-approve="${esc(q.id)}">سماح</button>
-        <button class="btn sm" data-reject="${esc(q.id)}">رفض</button>
-      </div>`).join("")}</div>
-  </div>` : ""}
+  ${S.requests.length ? `<div class="alert" style="background:var(--primary-soft);color:var(--primary)">📨 يوجد ${S.requests.length} طلب من الطفل — افتح تبويب «طلبات الطفل».</div>` : ""}
   <div class="cols">
     <div class="card">
       <h2>إعدادات المواقع</h2>
@@ -686,7 +777,8 @@ function tabWeb(el) {
         <button class="btn primary" type="submit">حظر</button>
       </form>
       <div class="row small">${Object.keys(PRESETS).map((k) => `<button class="btn sm" data-preset="${esc(k)}">+ ${esc(k)}</button>`).join("")}</div>
-      <div class="chips">${[...blocked].sort().map((d) => `<span class="chip"><span class="mono">${esc(d)}</span><button title="إلغاء الحظر" data-unblock="${esc(d)}">×</button></span>`).join("") || `<span class="muted small">لا توجد مواقع محظورة</span>`}</div>
+      <div class="chips">${[...blocked].sort().map((d) => `<span class="chip">${favImg(d)}<span class="mono">${esc(d)}</span><button title="إلغاء الحظر" data-unblock="${esc(d)}">×</button></span>`).join("") || `<span class="muted small">لا توجد مواقع محظورة</span>`}</div>
+      ${(web.blockedPaths || []).length ? `<h3 style="margin:8px 0 0">صفحات محظورة</h3><div class="chips">${(web.blockedPaths || []).sort().map((pg) => `<span class="chip">${favImg(hostOfUrl(pg))}<span class="mono" style="max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(pg)}</span><button title="إلغاء" data-unblockpage="${esc(pg)}">×</button></span>`).join("")}</div>` : ""}
       ${!web.filter && blocked.size ? `<div class="notice">فعّل «منع المواقع المحظورة» لتطبيق هذه القائمة.</div>` : ""}
     </div>
   </div>
@@ -697,7 +789,7 @@ function tabWeb(el) {
       <input class="input mono" style="flex:1;min-width:160px" id="allowedDomain" placeholder="wikipedia.org">
       <button class="btn primary" type="submit">سماح</button>
     </form>
-    <div class="chips">${[...allowed].sort().map((d) => `<span class="chip"><a class="mono" href="https://${esc(d)}" target="_blank" rel="noopener">${esc(d)}</a><button title="إزالة" data-disallow="${esc(d)}">×</button></span>`).join("") || `<span class="muted small">لا توجد مواقع مسموحة بعد</span>`}</div>
+    <div class="chips">${[...allowed].sort().map((d) => `<span class="chip">${favImg(d)}<a class="mono" href="https://${esc(d)}" target="_blank" rel="noopener">${esc(d)}</a><button title="إزالة" data-disallow="${esc(d)}">×</button></span>`).join("") || `<span class="muted small">لا توجد مواقع مسموحة بعد</span>`}</div>
   </div>
   <div class="card stack" style="margin-top:12px">
     <div class="row">
@@ -708,19 +800,29 @@ function tabWeb(el) {
     </div>
     ${S.web === null ? `<div class="empty">جارٍ التحميل…</div>` : ""}
     ${media.length ? `<h3>🎬 فيديوهات ووسائط شوهدت (${media.length})</h3><div class="list">${media.slice(0, 200).map((m) => `
-      <div class="item domain-row"><span style="min-width:0">
-          <a href="${esc(/youtube/i.test(m.p || "") ? ytLink(m) : "https://www.google.com/search?q=" + encodeURIComponent(m.ti || ""))}" target="_blank" rel="noopener"><b>${esc(m.ti)}</b></a>
-          <div class="muted small">${esc(m.ch || "")}${m.ch ? " · " : ""}${esc(m.a || m.p || "")}</div></span>
+      <div class="item domain-row"><span style="min-width:0;display:flex;align-items:center;gap:8px">${favImg(/youtube/i.test(m.p || "") ? "youtube.com" : "")}
+          <span style="min-width:0"><a href="${esc(/youtube/i.test(m.p || "") ? ytLink(m) : "https://www.google.com/search?q=" + encodeURIComponent(m.ti || ""))}" target="_blank" rel="noopener"><b>${esc(m.ti)}</b></a>
+          <div class="muted small">${esc(m.ch || "")}${m.ch ? " · " : ""}${esc(m.a || m.p || "")}</div></span></span>
         <span class="muted small">${esc(fmtTime.format(new Date(m.t || 0)))}</span><span></span></div>`).join("")}</div>` : ""}
-    ${urls.length ? `<h3>صفحات من المتصفح</h3><div class="list">${urls.slice(0, 100).map((u) => `
-      <div class="item domain-row"><span style="min-width:0">${u.ti ? `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.ti)}</div>` : ""}<a class="mono small" style="display:block" href="${esc(link(u.u))}" target="_blank" rel="noopener" title="${esc(u.u)}">${esc(u.u)}</a></span><span class="muted small">${esc(fmtTime.format(new Date(u.t || 0)))}</span><span></span></div>`).join("")}</div>` : ""}
+    ${urls.length ? `<h3>صفحات من المتصفح</h3><div class="list">${urls.slice(0, 100).map((u) => {
+      const host = hostOfUrl(u.u);
+      const pageB = (p.web && (p.web.blockedPaths || []).some((x) => pageOfUrl(u.u) === pageOfUrl(x) || pageOfUrl(u.u).startsWith(pageOfUrl(x) + "/")));
+      return `<div class="item domain-row"><span style="min-width:0;display:flex;align-items:center;gap:8px">${favImg(host)}
+        <span style="min-width:0">${u.ti ? `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(u.ti)}</div>` : ""}<a class="mono small" style="display:block" href="${esc(link(u.u))}" target="_blank" rel="noopener" title="${esc(u.u)}">${esc(u.u)}</a></span></span>
+        <span class="muted small">${esc(fmtTime.format(new Date(u.t || 0)))}</span>
+        <span class="row" style="gap:4px">${pageB ? `<span class="badge danger">محظورة</span>` : `<button class="btn sm" data-blockpage="${esc(u.u)}" title="حظر هذه الصفحة فقط">حظر الصفحة</button>`}<button class="btn sm danger" data-block="${esc(host)}" title="حظر الموقع كله">حظر الموقع</button></span></div>`;
+    }).join("")}</div>` : ""}
     <h3>النطاقات (${domains.length})</h3>
     <div class="list">${domains.slice(0, 400).map((d) => {
       const isB = isBlockedDomain(d.name, blocked);
+      const isA = isBlockedDomain(d.name, allowed);
       return `<div class="item domain-row">
-        <a class="mono" href="https://${esc(d.name)}" target="_blank" rel="noopener" title="${esc(d.name)}">${d.b ? "🚫 " : ""}${esc(d.name)}</a>
+        <span style="min-width:0;display:flex;align-items:center;gap:8px">${favImg(d.name)}<a class="mono" href="https://${esc(d.name)}" target="_blank" rel="noopener" title="${esc(d.name)}">${d.b ? "🚫 " : ""}${esc(d.name)}</a></span>
         <span class="muted small">${esc(fmtTime.format(new Date(d.t)))} · ${d.c}×</span>
-        ${isB ? `<button class="btn sm" data-unblock="${esc(normDomain(d.name) || d.name)}">إلغاء الحظر</button>` : `<button class="btn sm danger" data-block="${esc(d.name)}">حظر</button>`}
+        <span class="row" style="gap:4px">
+          ${isB ? `<button class="btn sm" data-unblock="${esc(normDomain(d.name) || d.name)}">إلغاء الحظر</button>` : `<button class="btn sm danger" data-block="${esc(d.name)}">حظر</button>`}
+          ${isA ? `<button class="btn sm" data-disallow="${esc(normDomain(d.name) || d.name)}">إزالة السماح</button>` : `<button class="btn sm" data-allow="${esc(d.name)}">سماح</button>`}
+        </span>
       </div>`;
     }).join("") || (S.web !== null ? `<div class="empty">لا يوجد سجل لهذا اليوم</div>` : "")}</div>
   </div>`;
@@ -733,36 +835,20 @@ function tabWeb(el) {
     run(updateDoc(devRef(), { "policy.web.blocked": arrayUnion(d) }), `تم حظر ${d}`);
   };
   el.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => run(updateDoc(devRef(), { "policy.web.blocked": arrayUnion(...PRESETS[b.dataset.preset]) }), "تمت الإضافة")));
-  el.querySelectorAll("[data-unblock]").forEach((b) => (b.onclick = () => {
-    const d = b.dataset.unblock;
-    // remove the domain itself and any parent entry that blocks it
-    const toRemove = [...blocked].filter((x) => x === d || isBlockedDomain(d, new Set([x])));
-    run(updateDoc(devRef(), { "policy.web.blocked": arrayRemove(...(toRemove.length ? toRemove : [d])) }), "تم إلغاء الحظر");
-  }));
-  el.querySelectorAll("[data-block]").forEach((b) => (b.onclick = () => {
-    const d = normDomain(b.dataset.block);
-    if (!d) return;
-    run(updateDoc(devRef(), { "policy.web.blocked": arrayUnion(d) }), `تم حظر ${d}`);
-  }));
+  el.querySelectorAll("[data-unblock]").forEach((b) => (b.onclick = () => unblockSite(b.dataset.unblock, blocked)));
+  el.querySelectorAll("[data-block]").forEach((b) => (b.onclick = () => blockSite(b.dataset.block)));
+  el.querySelectorAll("[data-allow]").forEach((b) => (b.onclick = () => allowSite(b.dataset.allow)));
+  el.querySelectorAll("[data-blockpage]").forEach((b) => (b.onclick = () => blockPage(b.dataset.blockpage)));
+  el.querySelectorAll("[data-unblockpage]").forEach((b) => (b.onclick = () =>
+    run(updateDoc(devRef(), { "policy.web.blockedPaths": arrayRemove(b.dataset.unblockpage) }), "تم إلغاء الحظر")));
   document.getElementById("addAllowed").onsubmit = (e) => {
     e.preventDefault();
     const d = normDomain(document.getElementById("allowedDomain").value);
     if (!d) return toast("اكتب نطاقاً صحيحاً مثل example.com");
-    run(updateDoc(devRef(), { "policy.web.allowed": arrayUnion(d) }), `تم السماح بـ ${d}`);
+    allowSite(d);
   };
   el.querySelectorAll("[data-disallow]").forEach((b) => (b.onclick = () =>
     run(updateDoc(devRef(), { "policy.web.allowed": arrayRemove(b.dataset.disallow) }), "تمت الإزالة")));
-  el.querySelectorAll("[data-approve]").forEach((b) => (b.onclick = () => {
-    const q = S.requests.find((x) => x.id === b.dataset.approve);
-    const d = q && normDomain(q.domain);
-    if (!d) return;
-    run(Promise.all([
-      updateDoc(devRef(), { "policy.web.allowed": arrayUnion(d), "policy.web.blocked": arrayRemove(d) }),
-      updateDoc(doc(db, "devices", S.deviceId, "requests", q.id), { status: "approved", doneAt: serverTimestamp() }),
-    ]), `تم السماح بـ ${d}`);
-  }));
-  el.querySelectorAll("[data-reject]").forEach((b) => (b.onclick = () =>
-    run(updateDoc(doc(db, "devices", S.deviceId, "requests", b.dataset.reject), { status: "rejected", doneAt: serverTimestamp() }), "تم الرفض")));
   document.getElementById("webDay").onchange = (e) => { S.webDay = e.target.value; listenWeb(); renderDevice(); };
   document.getElementById("hideSys").onchange = (e) => { S.hideSystemDomains = e.target.checked; renderDevice(); };
 }
@@ -822,6 +908,11 @@ function tabRules(el) {
         <input class="input mono" id="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" placeholder="4–8 أرقام" style="flex:1;min-width:140px">
         <button class="btn primary" type="submit">${p.pinHash ? "تغيير" : "تعيين"}</button>
       </form>
+      <h3 style="margin-top:8px">المدد الزمنية</h3>
+      <label class="field"><span>مدة السماح المؤقت للتطبيقات والمواقع المحظورة (دقائق)</span>
+        <input class="input" type="number" min="1" max="1440" id="overrideMin" value="${esc(p.overrideMinutes || 30)}"></label>
+      <label class="field"><span>مدة فتح التطبيق المقفل برمز بعد إدخال الرمز (دقائق)</span>
+        <input class="input" type="number" min="1" max="1440" id="unlockMin" value="${esc(p.unlockMinutes || 10)}"></label>
     </div>
     <div class="card">
       <h2>القيود على الجهاز</h2>
@@ -842,6 +933,16 @@ function tabRules(el) {
     if (!/^[0-9]{4,8}$/.test(pin)) return toast("الرمز من 4 إلى 8 أرقام");
     run(updateDoc(devRef(), { "policy.pinHash": await sha256("fg:" + pin) }), "تم حفظ الرمز");
   };
+  const saveMin = (id, field) => {
+    const el2 = document.getElementById(id);
+    if (el2) el2.onchange = () => {
+      const v = Math.max(1, Math.min(1440, parseInt(el2.value, 10) || 1));
+      el2.value = v;
+      run(updateDoc(devRef(), { [`policy.${field}`]: v }), "تم الحفظ");
+    };
+  };
+  saveMin("overrideMin", "overrideMinutes");
+  saveMin("unlockMin", "unlockMinutes");
   el.querySelectorAll("[data-rule]").forEach((i) => (i.onchange = () => {
     const save = () => run(updateDoc(devRef(), new FieldPath("policy", "restrictions", i.dataset.rule), i.checked), "تم الحفظ");
     if (i.dataset.rule === "no_debugging_features" && i.checked) {

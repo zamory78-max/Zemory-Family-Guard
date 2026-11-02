@@ -66,9 +66,12 @@ internal static class WebControl
                     block = new[] { "*" };
                     allow = p.AllowedDomains;
                 }
-                else if (p.WebFilter && p.BlockedDomains.Count > 0)
+                else if ((p.WebFilter && p.BlockedDomains.Count > 0) || p.BlockedPaths.Count > 0)
                 {
-                    block = p.BlockedDomains;
+                    var b = new List<string>();
+                    if (p.WebFilter) b.AddRange(p.BlockedDomains);
+                    b.AddRange(p.BlockedPaths);   // page-level blocks, e.g. "youtube.com/watch?v=..."
+                    block = b;
                 }
                 SetList(k, "URLBlocklist", block);
                 SetList(k, "URLAllowlist", allow);

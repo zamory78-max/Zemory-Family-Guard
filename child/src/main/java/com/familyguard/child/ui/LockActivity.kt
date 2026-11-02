@@ -39,6 +39,7 @@ import com.familyguard.child.Domains
 import com.familyguard.child.Guard
 import com.familyguard.child.Prefs
 import com.familyguard.child.enforce.Enforcer
+import com.familyguard.child.sync.Events
 import com.familyguard.child.sync.Repo
 import com.google.firebase.firestore.FieldValue
 import kotlin.concurrent.thread
@@ -60,7 +61,9 @@ class LockActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         read(intent)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() = goHome()
+            override fun handleOnBackPressed() {
+                if (reason != "hold") goHome() // the hold lock cannot be dismissed with Back
+            }
         })
         setContent { GuardTheme { Screen() } }
     }
@@ -100,11 +103,15 @@ class LockActivity : ComponentActivity() {
             return
         }
         val now = System.currentTimeMillis()
-        when {
-            reason == "pin" || reason == "ytsettings" -> Guard.unlockedUntil[target] = now + 10 * 60_000L
-            reason == "web" -> Guard.overrideUntil["web:$target"] = now + 30 * 60_000L
+        val unlockMs = Guard.policy.unlockMinutes * 60_000L
+        val overrideMs = Guard.policy.overrideMinutes * 60_000L
+        Events.log("unlock", if (isWeb) target else appLabel(target), reason)
+        when (reason) {
+            "pin", "ytsettings" -> Guard.unlockedUntil[target] = now + unlockMs
+            "hold" -> Guard.lockHoldSuppressedUntil = now + overrideMs
+            "web" -> Guard.overrideUntil["web:$target"] = now + overrideMs
             else -> {
-                Guard.overrideUntil[target] = now + 30 * 60_000L
+                Guard.overrideUntil[target] = now + overrideMs
                 val ctx = applicationContext
                 val pkg = target
                 thread {
@@ -147,6 +154,7 @@ class LockActivity : ComponentActivity() {
             "limit" -> "⏳" to "انتهى وقت الاستخدام لهذا اليوم"
             "bedtime" -> "🌙" to "حان وقت النوم"
             "paused" -> "⏸" to "الأجهزة متوقفة مؤقتاً"
+            "hold" -> "🔒" to "الجهاز مقفل من قبل المالك"
             "browser" -> "🌐" to "هذا المتصفح غير مسموح"
             "web" -> "🚫" to "هذا الموقع غير مسموح"
             "request" -> "📨" to "طلب السماح بموقع"
@@ -154,8 +162,8 @@ class LockActivity : ComponentActivity() {
         }
         val name = when (reason) {
             "web" -> target
-            "request" -> ""
-            "ytsettings" -> "أدخل رمز المالك لفتحها 10 دقائق"
+            "request", "hold" -> ""
+            "ytsettings" -> "أدخل رمز المالك لفتحها ${Guard.policy.unlockMinutes} دقيقة"
             "browser" -> appLabel(target) + " — استعمل متصفحاً مدعوماً مثل Chrome"
             else -> appLabel(target)
         }
@@ -177,10 +185,18 @@ class LockActivity : ComponentActivity() {
 
                     if (isWeb) RequestBox()
 
-                    if (reason != "request") {
+                    if (reason == "hold") {
+                        Text("سيُرفع القفل عندما يسمح المالك من تطبيقه.", fontSize = 14.sp, textAlign = TextAlign.Center)
+                        Spacer(Modifier.height(16.dp))
+                        if (showPin) {
+                            PinPad(error) { submit(it) }
+                        } else {
+                            TextButton(onClick = { showPin = true }) { Text("🔑 رمز المالك") }
+                        }
+                    } else if (reason != "request") {
                         if (reason == "pin" || reason == "ytsettings" || showPin) {
                             if (reason != "pin" && reason != "ytsettings") {
-                                Text("يمكن للمالك السماح مؤقتاً لمدة 30 دقيقة", fontSize = 14.sp)
+                                Text("يمكن للمالك السماح مؤقتاً لمدة ${Guard.policy.overrideMinutes} دقيقة", fontSize = 14.sp)
                                 Spacer(Modifier.height(12.dp))
                             }
                             PinPad(error) { submit(it) }
@@ -188,8 +204,8 @@ class LockActivity : ComponentActivity() {
                         } else {
                             TextButton(onClick = { showPin = true }) { Text("🔑 رمز المالك") }
                         }
+                        OutlinedButton(onClick = { goHome() }) { Text("رجوع") }
                     }
-                    OutlinedButton(onClick = { goHome() }) { Text("رجوع") }
                 }
             }
         }

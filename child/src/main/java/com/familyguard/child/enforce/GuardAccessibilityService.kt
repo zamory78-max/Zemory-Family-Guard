@@ -5,6 +5,7 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import com.familyguard.child.Domains
 import com.familyguard.child.Guard
+import com.familyguard.child.sync.Events
 import com.familyguard.child.ui.LockActivity
 import com.familyguard.child.web.WebLog
 
@@ -38,13 +39,24 @@ class GuardAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun appLabel(pkg: String): String = runCatching {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+    }.getOrDefault(pkg)
+
     private fun onForeground(pkg: String) {
         if (pkg == packageName || pkg == "com.android.systemui" || pkg == "android") return
         val ime = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
         if (ime != null && ime.startsWith("$pkg/")) return
 
+        // "Lock screen entirely": keep our full-screen lock on top until the parent releases it
+        if (Guard.isHoldActive()) {
+            LockActivity.show(this, "", "hold")
+            return
+        }
+
         val reason = Enforcer.blockReason(this, pkg)
         if (reason != null) {
+            Events.log("block", appLabel(pkg), reason)
             LockActivity.show(this, pkg, reason)
             return
         }
@@ -78,9 +90,11 @@ class GuardAccessibilityService : AccessibilityService() {
                 LockActivity.show(this, YT_SETTINGS, "ytsettings")
                 return
             }
-            if (!Guard.isOverridden("web:$host") && Domains.isSiteBlocked(host, p)) {
+            val pageBlocked = Domains.isPathBlocked(text, p.blockedPaths)
+            if (!Guard.isOverridden("web:$host") && (Domains.isSiteBlocked(host, p) || pageBlocked)) {
+                Events.log("web", host, if (pageBlocked) "page" else "site")
                 performGlobalAction(GLOBAL_ACTION_BACK)
-                LockActivity.show(this, host, "web", url = text)
+                LockActivity.show(this, if (pageBlocked) text else host, "web", url = text)
             }
             return
         }

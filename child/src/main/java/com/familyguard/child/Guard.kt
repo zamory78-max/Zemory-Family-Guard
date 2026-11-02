@@ -16,6 +16,11 @@ object Guard {
     /** Apps temporarily allowed by the parent PIN (blocked / over limit / bedtime). */
     val overrideUntil = ConcurrentHashMap<String, Long>()
 
+    /** "Lock screen entirely" is active until the parent releases it (or the owner PIN suppresses it briefly). */
+    @Volatile var lockHoldSuppressedUntil: Long = 0L
+
+    fun isHoldActive(): Boolean = policy.lockNow && lockHoldSuppressedUntil < System.currentTimeMillis()
+
     fun load(ctx: Context) {
         policy = Policy.parse(Prefs(ctx).policyJson)
     }

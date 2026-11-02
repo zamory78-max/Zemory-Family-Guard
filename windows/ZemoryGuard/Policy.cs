@@ -28,6 +28,10 @@ internal sealed class Policy
     public string BedEnd = "07:00";
     public HashSet<string> BedAllowed = new(Ci);
     public bool PauseAll;
+    public bool LockNow;
+    public int OverrideMinutes = 30;
+    public int UnlockMinutes = 10;
+    public HashSet<string> BlockedPaths = new(Ci);
     public string Raw = "";
 
     public bool Restricted(string key) => Restrictions.TryGetValue(key, out var v) && v;
@@ -53,6 +57,10 @@ internal sealed class Policy
             BedEnd = Str(bed["end"], "07:00"),
             BedAllowed = Set(bed["allowed"]),
             PauseAll = Bool(o["pauseAll"], false),
+            LockNow = Bool(o["lockNow"], false),
+            OverrideMinutes = (int)(Num(o["overrideMinutes"]) ?? 30),
+            UnlockMinutes = (int)(Num(o["unlockMinutes"]) ?? 10),
+            BlockedPaths = Set(web["blockedPaths"]),
             Raw = o.ToJsonString(),
         };
         if (o["limits"] is JsonObject lim)
@@ -104,6 +112,9 @@ internal sealed class Policy
 
     private static bool Bool(JsonNode? n, bool def) =>
         n is JsonValue v && v.TryGetValue<bool>(out var b) ? b : def;
+
+    private static long? Num(JsonNode? n) =>
+        n is JsonValue v && v.TryGetValue<long>(out var l) ? l : null;
 }
 
 internal static class Domains

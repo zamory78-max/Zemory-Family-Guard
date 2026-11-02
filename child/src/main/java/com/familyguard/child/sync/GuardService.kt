@@ -23,6 +23,7 @@ import com.familyguard.child.apps.AppInventory
 import com.familyguard.child.apps.Installer
 import com.familyguard.child.enforce.Enforcer
 import com.familyguard.child.enforce.UsageTracker
+import com.familyguard.child.ui.LockActivity
 import com.familyguard.child.ui.MainActivity
 import com.familyguard.child.web.MediaWatcher
 import com.familyguard.child.web.WebLog
@@ -58,6 +59,10 @@ class GuardService : Service() {
         goForeground()
         Guard.load(this)
         Dpm.bootstrap(this)
+        // Rare case: our service somehow runs in safe mode -> record it
+        if (runCatching { packageManager.isSafeMode }.getOrDefault(false)) {
+            Events.log("safemode", "الوضع الآمن", "detected", dedupMs = 10 * 60_000L)
+        }
         scope.launch { runCatching { applyAll() } }
         listen()
         loop()
@@ -102,8 +107,11 @@ class GuardService : Service() {
             val map = snap.get("policy") as? Map<*, *> ?: return@addSnapshotListener
             val json = JSONObject(map).toString()
             Prefs(this).policyJson = json
+            val wasHold = Guard.policy.lockNow
             Guard.policy = Policy.parse(json)
+            if (Guard.policy.lockNow && !wasHold) Guard.lockHoldSuppressedUntil = 0L // fresh lock ignores old suppression
             snap.getString("name")?.let { Prefs(this).deviceName = it }
+            if (Guard.isHoldActive()) runCatching { LockActivity.show(this, "", "hold") }
             scope.launch { runCatching { applyAll() }.onFailure { Log.w(TAG, "apply", it) } }
         }
 
@@ -177,8 +185,10 @@ class GuardService : Service() {
                 if (Guard.policy.needsVpn && !Guard.vpnRunning) {
                     runCatching { Dpm.applyVpn(ctx, Guard.policy) }
                 }
+                if (Guard.isHoldActive()) runCatching { LockActivity.show(ctx, "", "hold") }
                 val status = statusMap(ctx)
                 val changed = lastStatus != null && status != lastStatus
+                if (changed) logStatusChanges(lastStatus!!, status)
                 if (tick % 15 == 0) {
                     runCatching { uploadState(false) }.onFailure { Log.w(TAG, "upload", it) }
                 } else if (changed) {
@@ -186,10 +196,25 @@ class GuardService : Service() {
                 }
                 lastStatus = status
                 if (tick % 10 == 5) runCatching { WebLog.flush(ctx) }.onFailure { Log.w(TAG, "web", it) }
+                if (tick % 5 == 2) runCatching { Events.flush(ctx) }.onFailure { Log.w(TAG, "events", it) }
                 tick++
                 delay(60_000L)
             }
         }
+    }
+
+    private fun logStatusChanges(old: Map<String, Any>, cur: Map<String, Any>) {
+        fun flip(key: String, label: String) {
+            val before = old[key] == true
+            val after = cur[key] == true
+            if (before && !after) Events.log("tamper", label, "off")
+            else if (!before && after) Events.log("tamper", label, "on")
+        }
+        flip("accessibility", "خدمة إمكانية الوصول")
+        flip("usageAccess", "الوصول لبيانات الاستخدام")
+        flip("media", "سجل الفيديوهات")
+        if (Guard.policy.needsVpn) flip("vpn", "فلتر المواقع")
+        flip("admin", "الحماية من الحذف")
     }
 
     private fun heartbeat(status: Map<String, Any> = statusMap(this)) {

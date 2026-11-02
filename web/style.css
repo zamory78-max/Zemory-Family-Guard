@@ -205,3 +205,5 @@ pre.code { background: var(--surface-2); padding: 10px; border-radius: 8px; over
 a.mono { color: inherit; text-decoration: none; }
 a.mono:hover { color: var(--primary); text-decoration: underline; }
 .domain-row a.mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.fav { width: 18px; height: 18px; border-radius: 4px; flex-shrink: 0; object-fit: contain; background: var(--surface-2); }
+.chip .fav { width: 16px; height: 16px; }

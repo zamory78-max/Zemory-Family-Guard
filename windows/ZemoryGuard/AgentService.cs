@@ -233,15 +233,17 @@ internal sealed class AgentService : BackgroundService
     {
         if (_childSessions.Count == 0) return;
         var ids = _childSessions.Select(s => (int)s.id).ToHashSet();
-        var down = _policy.PauseAll || _policy.IsBedtimeNow();
+        var hold = _policy.LockNow;
+        var down = hold || _policy.PauseAll || _policy.IsBedtimeNow();
 
         if (down)
             foreach (var (id, _) in _childSessions)
-                if (!_lastLock.TryGetValue(id, out var t) || DateTime.UtcNow - t > TimeSpan.FromSeconds(30))
+                if (!_lastLock.TryGetValue(id, out var t) || DateTime.UtcNow - t > TimeSpan.FromSeconds(20))
                 {
                     _lastLock[id] = DateTime.UtcNow;
-                    Enqueue(id, new JsonObject { ["type"] = "lock", ["reason"] = _policy.PauseAll ? "paused" : "bedtime" });
+                    Enqueue(id, new JsonObject { ["type"] = "lock", ["reason"] = hold ? "hold" : _policy.PauseAll ? "paused" : "bedtime" });
                 }
+        if (hold) return; // in full lock, don't bother killing individual apps
 
         foreach (var proc in Process.GetProcesses())
         {

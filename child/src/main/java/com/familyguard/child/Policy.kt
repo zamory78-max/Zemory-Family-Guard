@@ -26,6 +26,10 @@ data class Policy(
     val bedEnd: String = "07:00",
     val bedAllowed: Set<String> = emptySet(),
     val pauseAll: Boolean = false,
+    val lockNow: Boolean = false,
+    val overrideMinutes: Int = 30,
+    val unlockMinutes: Int = 10,
+    val blockedPaths: Set<String> = emptySet(),
 ) {
     val needsVpn: Boolean get() = webFilter || webLog || safeSearch
 
@@ -71,6 +75,10 @@ data class Policy(
                 bedEnd = bed.optString("end", "07:00"),
                 bedAllowed = bed.optJSONArray("allowed").strings(),
                 pauseAll = o.optBoolean("pauseAll", false),
+                lockNow = o.optBoolean("lockNow", false),
+                overrideMinutes = o.optInt("overrideMinutes", 30).coerceIn(1, 1440),
+                unlockMinutes = o.optInt("unlockMinutes", 10).coerceIn(1, 1440),
+                blockedPaths = web.optJSONArray("blockedPaths").strings(),
             )
         }
 
@@ -98,6 +106,7 @@ data class Policy(
                 "blocked" to emptyList<String>(),
                 "allowOnly" to false,
                 "allowed" to emptyList<String>(),
+                "blockedPaths" to emptyList<String>(),
             ),
             "bedtime" to mapOf(
                 "enabled" to false,
@@ -106,6 +115,9 @@ data class Policy(
                 "allowed" to emptyList<String>(),
             ),
             "pauseAll" to false,
+            "lockNow" to false,
+            "overrideMinutes" to 30,
+            "unlockMinutes" to 10,
         )
 
         private fun minutes(hhmm: String): Int? {
@@ -164,7 +176,25 @@ object Domains {
     /** Host from a browser address bar text, or null if it does not look like a URL. */
     fun hostOf(text: String): String? = normalize(text)
 
-    /** Is this site blocked by the block list or (in allow-only mode) missing from the allow list? */
+    /** A full URL reduced to "host/path?query" without scheme or "www.", for page-level blocking. */
+    fun normalizeUrl(raw: String): String {
+        var s = raw.trim().lowercase()
+        s = s.substringAfter("://")
+        if (s.startsWith("www.")) s = s.removePrefix("www.")
+        return s.trimEnd('/')
+    }
+
+    /** True when the visited URL falls under one of the blocked page prefixes. */
+    fun isPathBlocked(url: String, paths: Set<String>): Boolean {
+        if (paths.isEmpty()) return false
+        val u = normalizeUrl(url)
+        return paths.any { p ->
+            val n = normalizeUrl(p)
+            n.isNotEmpty() && (u == n || u.startsWith("$n/") || u.startsWith("$n?") || u.startsWith("$n&"))
+        }
+    }
+
+    /** Is this site blocked by the block list, a blocked page, or (in allow-only mode) missing from the allow list? */
     fun isSiteBlocked(host: String, p: Policy): Boolean =
         (p.webFilter && isBlocked(host, p.blockedDomains)) ||
             (p.allowOnly && !isBlocked(host, p.allowedDomains))
