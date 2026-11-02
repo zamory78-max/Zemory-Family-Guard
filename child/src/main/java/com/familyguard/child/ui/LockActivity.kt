@@ -98,10 +98,26 @@ class LockActivity : ComponentActivity() {
             error = "لم يتم تعيين رمز المالك من لوحة التحكم"
             return
         }
-        if (!Guard.checkPin(pin)) {
-            error = "رمز غير صحيح"
+        val t = System.currentTimeMillis()
+        if (t < lockoutUntil) {
+            val m = ((lockoutUntil - t) / 60_000L) + 1
+            error = "محاولات كثيرة خاطئة. حاول بعد $m دقيقة"
             return
         }
+        if (!Guard.checkPin(pin)) {
+            val max = Guard.policy.maxAttempts
+            fails++
+            if (max > 0 && fails >= max) {
+                lockoutUntil = t + Guard.policy.lockoutMinutes * 60_000L
+                fails = 0
+                Events.log("lockout", if (isWeb) target else appLabel(target), "${Guard.policy.lockoutMinutes}m")
+                error = "محاولات كثيرة خاطئة. مُنعت المحاولة ${Guard.policy.lockoutMinutes} دقيقة"
+            } else {
+                error = "رمز غير صحيح" + if (max > 0) " (المتبقي ${max - fails})" else ""
+            }
+            return
+        }
+        fails = 0
         val now = System.currentTimeMillis()
         val unlockMs = Guard.policy.unlockMinutes * 60_000L
         val overrideMs = Guard.policy.overrideMinutes * 60_000L
@@ -241,6 +257,9 @@ class LockActivity : ComponentActivity() {
     }
 
     companion object {
+        private var fails = 0
+        private var lockoutUntil = 0L
+
         fun show(ctx: Context, target: String, reason: String, url: String? = null) {
             val i = Intent(ctx, LockActivity::class.java)
                 .putExtra("t", target)

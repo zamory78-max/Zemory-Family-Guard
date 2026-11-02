@@ -30,6 +30,8 @@ data class Policy(
     val lockNow: Boolean = false,
     val overrideMinutes: Int = 30,
     val unlockMinutes: Int = 10,
+    val maxAttempts: Int = 5,
+    val lockoutMinutes: Int = 5,
     val blockedPaths: Set<String> = emptySet(),
 ) {
     val needsVpn: Boolean get() = webFilter || webLog || safeSearch || blockYoutube
@@ -80,6 +82,8 @@ data class Policy(
                 lockNow = o.optBoolean("lockNow", false),
                 overrideMinutes = o.optInt("overrideMinutes", 30).coerceIn(1, 1440),
                 unlockMinutes = o.optInt("unlockMinutes", 10).coerceIn(1, 1440),
+                maxAttempts = o.optInt("maxAttempts", 5).coerceIn(0, 50),
+                lockoutMinutes = o.optInt("lockoutMinutes", 5).coerceIn(1, 1440),
                 blockedPaths = web.optJSONArray("blockedPaths").strings(),
             )
         }
@@ -121,6 +125,8 @@ data class Policy(
             "lockNow" to false,
             "overrideMinutes" to 30,
             "unlockMinutes" to 10,
+            "maxAttempts" to 5,
+            "lockoutMinutes" to 5,
         )
 
         private fun minutes(hhmm: String): Int? {

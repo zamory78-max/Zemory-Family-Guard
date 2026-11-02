@@ -329,7 +329,7 @@ const DEFAULT_POLICY = {
   },
   web: { filter: false, log: true, safeSearch: false, blockYoutube: false, blocked: [], allowOnly: false, allowed: [], blockedPaths: [] },
   bedtime: { enabled: false, start: "21:00", end: "07:00", allowed: [] },
-  pauseAll: false, lockNow: false, overrideMinutes: 30, unlockMinutes: 10,
+  pauseAll: false, lockNow: false, overrideMinutes: 30, unlockMinutes: 10, maxAttempts: 5, lockoutMinutes: 5,
 };
 
 // A second Firebase app instance so creating the child's account does not sign the parent out
@@ -703,7 +703,7 @@ function tabRequests(el) {
 // ----- tab: reports -----
 const EV = {
   block: ["⛔", "حظر تطبيق"], web: ["🚫", "موقع محظور"], unlock: ["🔓", "سماح برمز المالك"],
-  tamper: ["⚠️", "تغيّر في الحماية"], safemode: ["🟠", "الوضع الآمن"], boot: ["🔄", "تشغيل الجهاز"], hold: ["🔒", "قفل الشاشة"],
+  tamper: ["⚠️", "تغيّر في الحماية"], safemode: ["🟠", "الوضع الآمن"], boot: ["🔄", "تشغيل الجهاز"], hold: ["🔒", "قفل الشاشة"], lockout: ["⛔", "محاولات رمز خاطئة كثيرة"],
 };
 function tabReports(el) {
   const d = dev();
@@ -926,6 +926,11 @@ function tabRules(el) {
         <input class="input" type="number" min="1" max="1440" id="overrideMin" value="${esc(p.overrideMinutes || 30)}"></label>
       <label class="field"><span>مدة فتح التطبيق المقفل برمز بعد إدخال الرمز (دقائق)</span>
         <input class="input" type="number" min="1" max="1440" id="unlockMin" value="${esc(p.unlockMinutes || 10)}"></label>
+      <h3 style="margin-top:8px">محاولات إدخال الرمز</h3>
+      <label class="field"><span>عدد المحاولات الخاطئة المسموحة (0 = بلا حد)</span>
+        <input class="input" type="number" min="0" max="50" id="maxAtt" value="${esc(p.maxAttempts ?? 5)}"></label>
+      <label class="field"><span>مدة المنع بعد تجاوزها (دقائق)</span>
+        <input class="input" type="number" min="1" max="1440" id="lockMin" value="${esc(p.lockoutMinutes || 5)}"></label>
     </div>
     <div class="card">
       <h2>القيود على الجهاز</h2>
@@ -956,6 +961,9 @@ function tabRules(el) {
   };
   saveMin("overrideMin", "overrideMinutes");
   saveMin("unlockMin", "unlockMinutes");
+  saveMin("lockMin", "lockoutMinutes");
+  const ma = document.getElementById("maxAtt");
+  if (ma) ma.onchange = () => { const v = Math.max(0, Math.min(50, parseInt(ma.value, 10) || 0)); ma.value = v; run(updateDoc(devRef(), { "policy.maxAttempts": v }), "تم الحفظ"); };
   el.querySelectorAll("[data-rule]").forEach((i) => (i.onchange = () => {
     const save = () => run(updateDoc(devRef(), new FieldPath("policy", "restrictions", i.dataset.rule), i.checked), "تم الحفظ");
     if (i.dataset.rule === "no_debugging_features" && i.checked) {
