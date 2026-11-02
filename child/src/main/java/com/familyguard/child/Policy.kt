@@ -19,6 +19,7 @@ data class Policy(
     val webLog: Boolean = true,
     val safeSearch: Boolean = false,
     val blockYoutube: Boolean = false,
+    val blockAds: Boolean = false,
     val blockedDomains: Set<String> = emptySet(),
     val allowOnly: Boolean = false,
     val allowedDomains: Set<String> = emptySet(),
@@ -34,7 +35,7 @@ data class Policy(
     val lockoutMinutes: Int = 5,
     val blockedPaths: Set<String> = emptySet(),
 ) {
-    val needsVpn: Boolean get() = webFilter || webLog || safeSearch || blockYoutube
+    val needsVpn: Boolean get() = webFilter || webLog || safeSearch || blockYoutube || blockAds
 
     fun isBedtimeNow(): Boolean {
         if (!bedtimeEnabled) return false
@@ -69,6 +70,7 @@ data class Policy(
                 webLog = web.optBoolean("log", true),
                 safeSearch = web.optBoolean("safeSearch", false),
                 blockYoutube = web.optBoolean("blockYoutube", false),
+                blockAds = web.optBoolean("blockAds", false),
                 blockedDomains = web.optJSONArray("blocked").strings()
                     .mapNotNull { Domains.normalize(it) }.toSet(),
                 allowOnly = web.optBoolean("allowOnly", false),
@@ -110,6 +112,7 @@ data class Policy(
                 "log" to true,
                 "safeSearch" to false,
                 "blockYoutube" to false,
+                "blockAds" to false,
                 "blocked" to emptyList<String>(),
                 "allowOnly" to false,
                 "allowed" to emptyList<String>(),
@@ -180,6 +183,11 @@ object Domains {
 
     /** YouTube everywhere, including videos embedded in other websites. */
     fun isYoutube(name: String) = isBlocked(name, YOUTUBE)
+
+    private val ADS = setOf("doubleclick.net", "googlesyndication.com", "googleadservices.com", "adservice.google.com", "pagead2.googlesyndication.com", "googletagservices.com", "googletagmanager.com", "google-analytics.com", "admob.com", "adsense.com", "adnxs.com", "taboola.com", "outbrain.com", "popads.net", "propellerads.com", "adcolony.com", "unityads.unity3d.com", "applovin.com", "ads.mopub.com", "moatads.com", "criteo.com", "pubmatic.com", "rubiconproject.com", "openx.net", "amazon-adsystem.com", "ads.tiktok.com", "ads.youtube.com", "static.ads-twitter.com")
+
+    /** Ad / tracker networks (Google Ads, AdMob, etc.). */
+    fun isAd(name: String) = isBlocked(name, ADS)
 
     fun normalize(raw: String): String? {
         var s = raw.trim().lowercase()

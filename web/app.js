@@ -327,7 +327,7 @@ const DEFAULT_POLICY = {
     no_factory_reset: true, no_add_user: true, no_safe_boot: true, no_install_unknown_sources: true,
     no_config_date_time: true, no_control_apps: true, lock_settings: true, lock_youtube_settings: true,
   },
-  web: { filter: false, log: true, safeSearch: false, blockYoutube: false, blocked: [], allowOnly: false, allowed: [], blockedPaths: [] },
+  web: { filter: false, log: true, safeSearch: false, blockYoutube: false, blockAds: false, blocked: [], allowOnly: false, allowed: [], blockedPaths: [] },
   bedtime: { enabled: false, start: "21:00", end: "07:00", allowed: [] },
   pauseAll: false, lockNow: false, overrideMinutes: 30, unlockMinutes: 10, maxAttempts: 5, lockoutMinutes: 5,
 };
@@ -769,6 +769,8 @@ function tabWeb(el) {
         <label class="switch"><input type="checkbox" data-web="allowOnly" ${web.allowOnly ? "checked" : ""}></label></div>
       <div class="setting"><div class="txt"><b>حظر يوتيوب بالكامل (حتى داخل المواقع)</b><span class="small muted">يمنع تشغيل فيديوهات يوتيوب المضمّنة في أي موقع أو متصفح. يحتاج تفعيل «تسجيل المواقع» أو أي فلتر ليعمل.</span></div>
         <label class="switch"><input type="checkbox" data-web="blockYoutube" ${web.blockYoutube ? "checked" : ""}></label></div>
+      <div class="setting"><div class="txt"><b>حجب الإعلانات (غوغل وغيرها)</b><span class="small muted">يحجب شبكات الإعلانات والتتبع (Google Ads و AdMob وغيرها) في المتصفحات والألعاب. إعلانات يوتيوب نفسها لا يمكن حجبها لأنها تأتي من نفس خوادم الفيديو.</span></div>
+        <label class="switch"><input type="checkbox" data-web="blockAds" ${web.blockAds ? "checked" : ""}></label></div>
       <div class="setting"><div class="txt"><b>البحث الآمن</b><span class="small muted">يفرض البحث الآمن في Google و Bing ووضع يوتيوب المقيّد.</span></div>
         <label class="switch"><input type="checkbox" data-web="safeSearch" ${web.safeSearch ? "checked" : ""}></label></div>
     </div>

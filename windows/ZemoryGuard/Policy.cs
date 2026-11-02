@@ -21,6 +21,7 @@ internal sealed class Policy
     public bool WebLog = true;
     public bool SafeSearch;
     public bool BlockYoutube;
+    public bool BlockAds;
     public HashSet<string> BlockedDomains = new(Ci);
     public bool AllowOnly;
     public HashSet<string> AllowedDomains = new(Ci);
@@ -51,6 +52,7 @@ internal sealed class Policy
             WebLog = Bool(web["log"], true),
             SafeSearch = Bool(web["safeSearch"], false),
             BlockYoutube = Bool(web["blockYoutube"], false),
+            BlockAds = Bool(web["blockAds"], false),
             BlockedDomains = new HashSet<string>(Set(web["blocked"]).Select(Domains.Normalize).OfType<string>(), Ci),
             AllowOnly = Bool(web["allowOnly"], false),
             AllowedDomains = new HashSet<string>(Set(web["allowed"]).Select(Domains.Normalize).OfType<string>(), Ci),
@@ -69,6 +71,11 @@ internal sealed class Policy
         {
             p.WebFilter = true;
             foreach (var d in new[] { "youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com" }) p.BlockedDomains.Add(d);
+        }
+        if (p.BlockAds)
+        {
+            p.WebFilter = true;
+            foreach (var d in new[] { "doubleclick.net", "googlesyndication.com", "googleadservices.com", "adservice.google.com", "pagead2.googlesyndication.com", "googletagservices.com", "googletagmanager.com", "google-analytics.com", "admob.com", "adsense.com", "adnxs.com", "taboola.com", "outbrain.com", "popads.net", "propellerads.com", "adcolony.com", "unityads.unity3d.com", "applovin.com", "ads.mopub.com", "moatads.com", "criteo.com", "pubmatic.com", "rubiconproject.com", "openx.net", "amazon-adsystem.com", "ads.tiktok.com", "ads.youtube.com", "static.ads-twitter.com" }) p.BlockedDomains.Add(d);
         }
         if (o["limits"] is JsonObject lim)
             foreach (var (k, v) in lim)
