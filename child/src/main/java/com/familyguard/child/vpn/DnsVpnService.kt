@@ -127,7 +127,8 @@ class DnsVpnService : VpnService() {
     private fun resolve(query: ByteArray, q: DnsMessage.Question): ByteArray? {
         val name = q.name.trimEnd('.')
         val pol = Guard.policy
-        val blocked = pol.webFilter && Domains.isBlocked(name, pol.blockedDomains)
+        val blocked = (pol.webFilter && Domains.isBlocked(name, pol.blockedDomains)) ||
+            (pol.blockYoutube && Domains.isYoutube(name))
         if (q.type == DnsMessage.TYPE_A || q.type == DnsMessage.TYPE_AAAA || blocked) {
             WebLog.domain(name, blocked)
         }

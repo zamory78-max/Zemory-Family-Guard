@@ -18,6 +18,7 @@ data class Policy(
     val webFilter: Boolean = false,
     val webLog: Boolean = true,
     val safeSearch: Boolean = false,
+    val blockYoutube: Boolean = false,
     val blockedDomains: Set<String> = emptySet(),
     val allowOnly: Boolean = false,
     val allowedDomains: Set<String> = emptySet(),
@@ -31,7 +32,7 @@ data class Policy(
     val unlockMinutes: Int = 10,
     val blockedPaths: Set<String> = emptySet(),
 ) {
-    val needsVpn: Boolean get() = webFilter || webLog || safeSearch
+    val needsVpn: Boolean get() = webFilter || webLog || safeSearch || blockYoutube
 
     fun isBedtimeNow(): Boolean {
         if (!bedtimeEnabled) return false
@@ -65,6 +66,7 @@ data class Policy(
                 webFilter = web.optBoolean("filter", false),
                 webLog = web.optBoolean("log", true),
                 safeSearch = web.optBoolean("safeSearch", false),
+                blockYoutube = web.optBoolean("blockYoutube", false),
                 blockedDomains = web.optJSONArray("blocked").strings()
                     .mapNotNull { Domains.normalize(it) }.toSet(),
                 allowOnly = web.optBoolean("allowOnly", false),
@@ -103,6 +105,7 @@ data class Policy(
                 "filter" to false,
                 "log" to true,
                 "safeSearch" to false,
+                "blockYoutube" to false,
                 "blocked" to emptyList<String>(),
                 "allowOnly" to false,
                 "allowed" to emptyList<String>(),
@@ -164,6 +167,14 @@ private fun JSONObject?.boolMap(): Map<String, Boolean> {
 }
 
 object Domains {
+    private val YOUTUBE = setOf(
+        "youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com",
+        "youtubei.googleapis.com", "youtube.googleapis.com", "yt3.ggpht.com",
+    )
+
+    /** YouTube everywhere, including videos embedded in other websites. */
+    fun isYoutube(name: String) = isBlocked(name, YOUTUBE)
+
     fun normalize(raw: String): String? {
         var s = raw.trim().lowercase()
         s = s.substringAfter("://")

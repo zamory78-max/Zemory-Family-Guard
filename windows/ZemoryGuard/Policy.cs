@@ -20,6 +20,7 @@ internal sealed class Policy
     public bool WebFilter;
     public bool WebLog = true;
     public bool SafeSearch;
+    public bool BlockYoutube;
     public HashSet<string> BlockedDomains = new(Ci);
     public bool AllowOnly;
     public HashSet<string> AllowedDomains = new(Ci);
@@ -49,6 +50,7 @@ internal sealed class Policy
             WebFilter = Bool(web["filter"], false),
             WebLog = Bool(web["log"], true),
             SafeSearch = Bool(web["safeSearch"], false),
+            BlockYoutube = Bool(web["blockYoutube"], false),
             BlockedDomains = new HashSet<string>(Set(web["blocked"]).Select(Domains.Normalize).OfType<string>(), Ci),
             AllowOnly = Bool(web["allowOnly"], false),
             AllowedDomains = new HashSet<string>(Set(web["allowed"]).Select(Domains.Normalize).OfType<string>(), Ci),
@@ -63,6 +65,11 @@ internal sealed class Policy
             BlockedPaths = Set(web["blockedPaths"]),
             Raw = o.ToJsonString(),
         };
+        if (p.BlockYoutube)
+        {
+            p.WebFilter = true;
+            foreach (var d in new[] { "youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com" }) p.BlockedDomains.Add(d);
+        }
         if (o["limits"] is JsonObject lim)
             foreach (var (k, v) in lim)
                 if (v is JsonValue jv && jv.TryGetValue<long>(out var n) && n > 0) p.Limits[k] = (int)n;

@@ -327,7 +327,7 @@ const DEFAULT_POLICY = {
     no_factory_reset: true, no_add_user: true, no_safe_boot: true, no_install_unknown_sources: true,
     no_config_date_time: true, no_control_apps: true, lock_settings: true, lock_youtube_settings: true,
   },
-  web: { filter: false, log: true, safeSearch: false, blocked: [], allowOnly: false, allowed: [], blockedPaths: [] },
+  web: { filter: false, log: true, safeSearch: false, blockYoutube: false, blocked: [], allowOnly: false, allowed: [], blockedPaths: [] },
   bedtime: { enabled: false, start: "21:00", end: "07:00", allowed: [] },
   pauseAll: false, lockNow: false, overrideMinutes: 30, unlockMinutes: 10,
 };
@@ -767,6 +767,8 @@ function tabWeb(el) {
         <label class="switch"><input type="checkbox" data-web="filter" ${web.filter ? "checked" : ""}></label></div>
       <div class="setting"><div class="txt"><b>السماح فقط بالمواقع المسموحة</b><span class="small muted">يمنع كل المواقع في المتصفحات ما عدا قائمة «المواقع المسموحة». يستطيع الطفل إرسال طلب للسماح بموقع. المتصفحات غير المدعومة تُمنع.</span></div>
         <label class="switch"><input type="checkbox" data-web="allowOnly" ${web.allowOnly ? "checked" : ""}></label></div>
+      <div class="setting"><div class="txt"><b>حظر يوتيوب بالكامل (حتى داخل المواقع)</b><span class="small muted">يمنع تشغيل فيديوهات يوتيوب المضمّنة في أي موقع أو متصفح. يحتاج تفعيل «تسجيل المواقع» أو أي فلتر ليعمل.</span></div>
+        <label class="switch"><input type="checkbox" data-web="blockYoutube" ${web.blockYoutube ? "checked" : ""}></label></div>
       <div class="setting"><div class="txt"><b>البحث الآمن</b><span class="small muted">يفرض البحث الآمن في Google و Bing ووضع يوتيوب المقيّد.</span></div>
         <label class="switch"><input type="checkbox" data-web="safeSearch" ${web.safeSearch ? "checked" : ""}></label></div>
     </div>
@@ -789,7 +791,14 @@ function tabWeb(el) {
       <input class="input mono" style="flex:1;min-width:160px" id="allowedDomain" placeholder="wikipedia.org">
       <button class="btn primary" type="submit">سماح</button>
     </form>
-    <div class="chips">${[...allowed].sort().map((d) => `<span class="chip">${favImg(d)}<a class="mono" href="https://${esc(d)}" target="_blank" rel="noopener">${esc(d)}</a><button title="إزالة" data-disallow="${esc(d)}">×</button></span>`).join("") || `<span class="muted small">لا توجد مواقع مسموحة بعد</span>`}</div>
+    ${allowed.size > 12 ? `<input class="input" id="allowedFilter" placeholder="ابحث في ${allowed.size} موقعاً مسموحاً…" value="${esc(S.allowedQ || "")}">` : ""}
+    <div class="chips" id="allowedChips">${(() => {
+      const q = (S.allowedQ || "").toLowerCase();
+      const all = [...allowed].sort().filter((d) => !q || d.includes(q));
+      const shown = S.allowedAll || q ? all : all.slice(0, 24);
+      return shown.map((d) => `<span class="chip">${favImg(d)}<a class="mono" href="https://${esc(d)}" target="_blank" rel="noopener">${esc(d)}</a><button title="إزالة" data-disallow="${esc(d)}">×</button></span>`).join("") || `<span class="muted small">لا توجد مواقع مسموحة${q ? " مطابقة" : " بعد"}</span>`;
+    })()}</div>
+    ${allowed.size > 24 && !S.allowedQ ? `<button class="btn sm" id="allowedMore">${S.allowedAll ? "عرض أقل" : `عرض الكل (${allowed.size})`}</button>` : ""}
   </div>
   <div class="card stack" style="margin-top:12px">
     <div class="row">
@@ -834,6 +843,10 @@ function tabWeb(el) {
     if (!d) return toast("اكتب نطاقاً صحيحاً مثل example.com");
     run(updateDoc(devRef(), { "policy.web.blocked": arrayUnion(d) }), `تم حظر ${d}`);
   };
+  const af = document.getElementById("allowedFilter");
+  if (af) af.oninput = () => { S.allowedQ = af.value.trim(); const pos = af.selectionStart; tabWeb(el); const n = document.getElementById("allowedFilter"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } };
+  const am = document.getElementById("allowedMore");
+  if (am) am.onclick = () => { S.allowedAll = !S.allowedAll; tabWeb(el); };
   el.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => run(updateDoc(devRef(), { "policy.web.blocked": arrayUnion(...PRESETS[b.dataset.preset]) }), "تمت الإضافة")));
   el.querySelectorAll("[data-unblock]").forEach((b) => (b.onclick = () => unblockSite(b.dataset.unblock, blocked)));
   el.querySelectorAll("[data-block]").forEach((b) => (b.onclick = () => blockSite(b.dataset.block)));
