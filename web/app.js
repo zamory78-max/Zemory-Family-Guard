@@ -160,12 +160,40 @@ onAuthStateChanged(auth, (u) => {
       S.devices = new Map();
       qs.forEach((d) => { const v = d.data(); if (!v.unlinked) S.devices.set(d.id, { id: d.id, ...v }); });
       if (S.deviceId && !S.devices.has(S.deviceId)) { stopDetail(); S.deviceId = null; }
+      if (BG) watchRequests();
       render();
     },
     (e) => { console.error(e); toast("تعذّر قراءة الأجهزة: " + e.code); },
   );
   render();
 });
+
+// ---------- phone notifications for the child's requests (runs only in the app's hidden copy) ----------
+const reqWatch = new Map();
+function watchRequests() {
+  for (const [id, un] of reqWatch) if (!S.devices.has(id)) { un(); reqWatch.delete(id); }
+  for (const id of S.devices.keys()) {
+    if (reqWatch.has(id)) continue;
+    reqWatch.set(id, onSnapshot(collection(db, "devices", id, "requests"), (qs) => {
+      let seen = [];
+      try { seen = JSON.parse(localStorage.getItem("fgNotified") || "[]"); } catch {}
+      qs.docs.forEach((d) => {
+        const q = d.data();
+        const t = tsMs(q.ts);
+        if (q.status !== "pending" || !t || Date.now() - t > 24 * 3600 * 1000) return;
+        const key = `${id}/${d.id}/${t}`;
+        if (seen.includes(key)) return;
+        seen.push(key);
+        const name = (S.devices.get(id) || {}).name || "جهاز";
+        const body = q.kind === "app"
+          ? `يطلب فتح تطبيق «${q.label || q.pkg}»${WHY[q.why] ? " — " + WHY[q.why] : ""}`
+          : `يطلب فتح الموقع ${q.domain || ""}`;
+        try { window.ZemoryApp && window.ZemoryApp.notify && window.ZemoryApp.notify(`📨 طلب جديد من ${name}`, body, key); } catch {}
+      });
+      try { localStorage.setItem("fgNotified", JSON.stringify(seen.slice(-300))); } catch {}
+    }));
+  }
+}
 
 function renderAuth() {
   $user.innerHTML = "";
@@ -199,8 +227,9 @@ function renderAuth() {
 }
 
 // ---------- routing ----------
+const BG = new URLSearchParams(location.search).get("bg") === "1"; // hidden copy used for phone notifications
 function render() {
-  if (!S.user) return;
+  if (!S.user || BG) return;
   if (S.deviceId && dev()) renderDevice();
   else renderDevices();
 }

@@ -3,6 +3,8 @@ package com.familyguard.child.ui
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -66,6 +68,58 @@ class LockActivity : ComponentActivity() {
             }
         })
         setContent { GuardTheme { Screen() } }
+    }
+
+    private val handler = Handler(Looper.getMainLooper())
+    private val watch = object : Runnable {
+        override fun run() {
+            if (!isFinishing && !stillLocked()) {
+                closeBecauseReleased()
+                return
+            }
+            handler.postDelayed(this, 1500)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        handler.removeCallbacks(watch)
+        handler.postDelayed(watch, 1000)
+    }
+
+    override fun onPause() {
+        handler.removeCallbacks(watch)
+        super.onPause()
+    }
+
+    /** False once the owner has lifted whatever caused this lock (policy changes arrive live). */
+    private fun stillLocked(): Boolean {
+        val ctx = applicationContext
+        return when (reason) {
+            "hold", "screen_lock" -> Guard.isHoldActive()
+            "pin" -> Enforcer.isPinLocked(ctx, target) && !Guard.isUnlocked(target) && !Guard.isPaused(ctx)
+            "ytsettings", "request" -> true
+            "web" -> {
+                val host = Domains.hostOf(target) ?: target
+                !Guard.isOverridden("web:$target") && !Guard.isOverridden("web:$host") &&
+                    (Domains.isSiteBlocked(host, Guard.policy) || Domains.isPathBlocked(requestUrl, Guard.policy.blockedPaths))
+            }
+            else -> target.isBlank() || Enforcer.blockReason(ctx, target) != null
+        }
+    }
+
+    private fun closeBecauseReleased() {
+        val ctx = applicationContext
+        val pkg = target
+        if (!isHold && !isWeb && pkg.isNotBlank()) {
+            thread {
+                runCatching { Enforcer.apply(ctx) }
+                ctx.packageManager.getLaunchIntentForPackage(pkg)?.let {
+                    runCatching { ctx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                }
+            }
+        }
+        finish()
     }
 
     override fun onNewIntent(intent: Intent) {

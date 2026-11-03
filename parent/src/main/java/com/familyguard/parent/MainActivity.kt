@@ -34,11 +34,17 @@ class MainActivity : ComponentActivity() {
         applyPendingSignOut()
     }
 
+    private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     private val settingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        NotifyService.start(this)
         val loader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
             .build()
