@@ -111,7 +111,7 @@ class GuardService : Service() {
             Guard.policy = Policy.parse(json)
             if (Guard.policy.lockNow && !wasHold) Guard.lockHoldSuppressedUntil = 0L // fresh lock ignores old suppression
             snap.getString("name")?.let { Prefs(this).deviceName = it }
-            if (Guard.isHoldActive()) runCatching { LockActivity.show(this, "", "hold") }
+            if (Guard.isHoldActive()) runCatching { LockActivity.show(this, "", Guard.holdReason()) }
             scope.launch { runCatching { applyAll() }.onFailure { Log.w(TAG, "apply", it) } }
         }
 
@@ -149,6 +149,13 @@ class GuardService : Service() {
                 }
                 "enable_system_app" -> Dpm.enableSystemApp(this, pkg ?: error("لا يوجد تطبيق"))
                 "lock_now" -> Dpm.lockNow(this)
+                "grant_app" -> {
+                    // the parent approved a child's request to open an app, for a limited time
+                    val p = pkg ?: error("لا يوجد تطبيق")
+                    val mins = (doc.getLong("minutes") ?: Guard.policy.overrideMinutes.toLong()).coerceIn(1L, 1440L)
+                    Guard.overrideUntil[p] = System.currentTimeMillis() + mins * 60_000L
+                    Enforcer.apply(this)
+                }
                 "reboot" -> {
                     Repo.commandResult(this, doc.id, "done", "جارٍ إعادة التشغيل")
                     delay(1500)
@@ -185,7 +192,7 @@ class GuardService : Service() {
                 if (Guard.policy.needsVpn && !Guard.vpnRunning) {
                     runCatching { Dpm.applyVpn(ctx, Guard.policy) }
                 }
-                if (Guard.isHoldActive()) runCatching { LockActivity.show(ctx, "", "hold") }
+                if (Guard.isHoldActive()) runCatching { LockActivity.show(ctx, "", Guard.holdReason()) }
                 val status = statusMap(ctx)
                 val changed = lastStatus != null && status != lastStatus
                 if (changed) logStatusChanges(lastStatus!!, status)

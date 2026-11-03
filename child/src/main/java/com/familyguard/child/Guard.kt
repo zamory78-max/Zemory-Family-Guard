@@ -19,7 +19,12 @@ object Guard {
     /** "Lock screen entirely" is active until the parent releases it (or the owner PIN suppresses it briefly). */
     @Volatile var lockHoldSuppressedUntil: Long = 0L
 
-    fun isHoldActive(): Boolean = policy.lockNow && lockHoldSuppressedUntil < System.currentTimeMillis()
+    /** Owner "lock now", or the screen schedule in "lock the whole screen" mode. */
+    fun isHoldActive(): Boolean =
+        (policy.lockNow || policy.screenLocksNow()) && lockHoldSuppressedUntil < System.currentTimeMillis()
+
+    /** Lock-screen reason to show: "hold" (owner locked it) or "screen_lock" (screen time is over). */
+    fun holdReason(): String = if (policy.lockNow) "hold" else "screen_lock"
 
     fun load(ctx: Context) {
         policy = Policy.parse(Prefs(ctx).policyJson)

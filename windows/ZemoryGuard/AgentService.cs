@@ -215,7 +215,7 @@ internal sealed class AgentService : BackgroundService
 
     // ---------------- Enforcement ----------------
 
-    private string? BlockReason(string exe, bool down)
+    private string? BlockReason(string exe, HashSet<string>? downAllowed)
     {
         var now = DateTime.UtcNow;
         if (_overrideUntil.TryGetValue(exe, out var o) && o > now) return null;
@@ -224,7 +224,8 @@ internal sealed class AgentService : BackgroundService
         if (p.PinLocked.Contains(exe) && p.PinHash.Length > 0 &&
             !(_unlockedUntil.TryGetValue(exe, out var u) && u > now)) return "pin";
         if (p.Limits.TryGetValue(exe, out var lim) && _usage.Minutes(exe) >= lim) return "limit";
-        if (down && _usage.Known(exe) && !p.BedAllowed.Contains(exe)) return p.PauseAll ? "paused" : "bedtime";
+        if (downAllowed != null && _usage.Known(exe) && !downAllowed.Contains(exe))
+            return p.PauseAll ? "paused" : p.IsBedtimeNow() ? "bedtime" : "screen";
         if ((p.AllowOnly || p.WebFilter) && WebControl.UnsupportedBrowsers.Contains(exe)) return "browser";
         return null;
     }
@@ -233,15 +234,16 @@ internal sealed class AgentService : BackgroundService
     {
         if (_childSessions.Count == 0) return;
         var ids = _childSessions.Select(s => (int)s.id).ToHashSet();
-        var hold = _policy.LockNow;
-        var down = hold || _policy.PauseAll || _policy.IsBedtimeNow();
+        var hold = _policy.LockNow || _policy.ScreenLocksNow();
+        var downAllowed = _policy.DownAllowed();
+        var down = hold || downAllowed != null;
 
         if (down)
             foreach (var (id, _) in _childSessions)
                 if (!_lastLock.TryGetValue(id, out var t) || DateTime.UtcNow - t > TimeSpan.FromSeconds(20))
                 {
                     _lastLock[id] = DateTime.UtcNow;
-                    Enqueue(id, new JsonObject { ["type"] = "lock", ["reason"] = hold ? "hold" : _policy.PauseAll ? "paused" : "bedtime" });
+                    Enqueue(id, new JsonObject { ["type"] = "lock", ["reason"] = _policy.LockNow ? "hold" : hold ? "screen_lock" : _policy.PauseAll ? "paused" : _policy.IsBedtimeNow() ? "bedtime" : "screen" });
                 }
         if (hold) return; // in full lock, don't bother killing individual apps
 
@@ -254,7 +256,7 @@ internal sealed class AgentService : BackgroundService
                     if (!ids.Contains(proc.SessionId)) continue;
                     var exe = proc.ProcessName.ToLowerInvariant() + ".exe";
                     if (Essential.Contains(exe)) continue;
-                    var reason = BlockReason(exe, down);
+                    var reason = BlockReason(exe, downAllowed);
                     if (reason == null) continue;
                     proc.Kill(true);
                     Notify((uint)proc.SessionId, exe, reason);
@@ -408,6 +410,14 @@ internal sealed class AgentService : BackgroundService
                 return await InstallAsync(c["url"]?.GetValue<string>() ?? throw new Exception("لا يوجد رابط"));
             case "uninstall":
                 return Uninstall(c["pkg"]?.GetValue<string>() ?? throw new Exception("لا يوجد تطبيق"));
+            case "grant_app":
+            {
+                // the parent approved a child's request to open a program, for a limited time
+                var exe = (c["pkg"]?.GetValue<string>() ?? throw new Exception("لا يوجد تطبيق")).ToLowerInvariant();
+                var mins = c["minutes"] is JsonValue mv && mv.TryGetValue<long>(out var ml) ? (int)Math.Clamp(ml, 1, 1440) : _policy.OverrideMinutes;
+                _overrideUntil[exe] = DateTime.UtcNow.AddMinutes(mins);
+                return "تم";
+            }
             default:
                 throw new Exception("أمر غير مدعوم على ويندوز: " + type);
         }
@@ -563,9 +573,35 @@ internal sealed class AgentService : BackgroundService
                     resp = new JsonObject { ["ok"] = ok, ["pinSet"] = _policy.PinHash.Length > 0 };
                     break;
                 case "/request":
+                    if (_fb == null || _cfg == null)
+                    {
+                        resp = new JsonObject { ["ok"] = false };
+                        break;
+                    }
+                    if (body?["kind"]?.GetValue<string>() == "app")
+                    {
+                        // the child asks the owner to allow a program
+                        var appExe = (body["exe"]?.GetValue<string>() ?? "").ToLowerInvariant();
+                        if (appExe.Length == 0 || appExe.Contains('/') || appExe.Contains('\\'))
+                        {
+                            resp = new JsonObject { ["ok"] = false };
+                            break;
+                        }
+                        await _fb.CommitAsync(Firebase.UpdateWrite($"devices/{_cfg.DeviceId}/requests/app_{appExe}",
+                            new Dictionary<string, object?>
+                            {
+                                ["kind"] = "app",
+                                ["pkg"] = appExe,
+                                ["label"] = body["label"]?.GetValue<string>() ?? appExe,
+                                ["why"] = body["reason"]?.GetValue<string>() ?? "blocked",
+                                ["status"] = "pending",
+                            },
+                            null, new[] { Firebase.ServerTime("ts") }));
+                        break;
+                    }
                     var url = body?["url"]?.GetValue<string>() ?? "";
                     var host = Domains.Normalize(url);
-                    if (host == null || _fb == null || _cfg == null)
+                    if (host == null)
                     {
                         resp = new JsonObject { ["ok"] = false };
                         break;

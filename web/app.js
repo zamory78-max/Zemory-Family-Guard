@@ -329,6 +329,7 @@ const DEFAULT_POLICY = {
   },
   web: { filter: false, log: true, safeSearch: false, blockYoutube: false, blockAds: false, blocked: [], allowOnly: false, allowed: [], blockedPaths: [] },
   bedtime: { enabled: false, start: "21:00", end: "07:00", allowed: [] },
+  screen: { enabled: false, mode: "allowed", allowed: [], days: Object.fromEntries([0, 1, 2, 3, 4, 5, 6].map((i) => [String(i), { on: true, start: "07:00", end: "21:00" }])) },
   pauseAll: false, lockNow: false, overrideMinutes: 30, unlockMinutes: 10, maxAttempts: 5, lockoutMinutes: 5,
 };
 
@@ -434,6 +435,7 @@ function showAddDevice() {
 const TABS = [
   ["apps", "التطبيقات"],
   ["time", "الوقت"],
+  ["screen", "الشاشة"],
   ["web", "المواقع"],
   ["requests", "طلبات الطفل"],
   ["reports", "التقارير"],
@@ -466,7 +468,7 @@ function renderDevice() {
   document.getElementById("delTop").onclick = () => confirmDeleteDevice(d.id);
   $app.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; renderDevice(); }));
   const body = document.getElementById("tabBody");
-  ({ apps: tabApps, time: tabTime, web: tabWeb, requests: tabRequests, reports: tabReports, rules: tabRules, commands: tabCommands }[S.tab])(body);
+  ({ apps: tabApps, time: tabTime, screen: tabScreen, web: tabWeb, requests: tabRequests, reports: tabReports, rules: tabRules, commands: tabCommands }[S.tab])(body);
 
   if (keepSearch) {
     const s = document.getElementById("search");
@@ -630,6 +632,119 @@ function tabTime(el) {
   };
 }
 
+// ----- tab: screen (weekly schedule) -----
+const WEEKDAYS = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+const SCREEN_DAY = { on: true, start: "07:00", end: "21:00" };
+
+/** The saved screen schedule with defaults filled in for anything missing. */
+function screenOf(p) {
+  const sc = p.screen || {};
+  const days = {};
+  for (let i = 0; i < 7; i++) days[i] = { ...SCREEN_DAY, ...((sc.days || {})[i] || {}) };
+  return { enabled: !!sc.enabled, mode: sc.mode === "lock" ? "lock" : "allowed", allowed: sc.allowed || [], days };
+}
+const hhmm = (t) => { const [h, m] = String(t || "").split(":").map(Number); return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null; };
+const dayValid = (d) => !d.on || (hhmm(d.start) !== null && hhmm(d.end) !== null && hhmm(d.start) < hhmm(d.end));
+
+/** "Open now / closed, opens at ..." using this browser's clock (same time zone as the device in a family). */
+function screenStatus(sc) {
+  if (!sc.enabled) return "الجدول غير مفعّل: لا يوجد قيد على الشاشة.";
+  const n = new Date();
+  const d = sc.days[n.getDay()];
+  const now = n.getHours() * 60 + n.getMinutes();
+  if (!d.on || !dayValid(d)) return "اليوم بلا قيد: الشاشة مفتوحة طوال اليوم.";
+  if (now < hhmm(d.start)) return `🔴 الشاشة مغلقة الآن، تُفتح الساعة ${d.start}.`;
+  if (now >= hhmm(d.end)) return `🔴 الشاشة مغلقة الآن (انتهى الوقت ${d.end}).`;
+  return `🟢 الشاشة مفتوحة الآن حتى ${d.end}.`;
+}
+
+function tabScreen(el) {
+  const p = pol();
+  const sc = screenOf(p);
+  const allowed = new Set(sc.allowed);
+  const apps = appList().filter((a) => a.launchable).sort((a, b) => a.label.localeCompare(b.label, "ar"));
+  const q = (S.screenQ || "").trim().toLowerCase();
+  const shown = q ? apps.filter((a) => a.label.toLowerCase().includes(q) || a.pkg.toLowerCase().includes(q)) : apps;
+  el.innerHTML = `
+  <div class="cols">
+    <div class="card stack">
+      <div class="setting">
+        <div class="txt"><b>🕒 جدول الشاشة الأسبوعي</b><span class="small muted">حدّد لكل يوم وقت فتح الشاشة (من – إلى). خارج هذا الوقت يُطبَّق الخيار الذي تختاره أدناه. اليوم المُعطَّل بلا قيد.</span></div>
+        <label class="switch"><input type="checkbox" id="scOn" ${sc.enabled ? "checked" : ""}></label>
+      </div>
+      <div class="notice" id="scStatus">${esc(screenStatus(sc))}</div>
+      <div class="list">
+        ${WEEKDAYS.map((name, i) => { const d = sc.days[i]; return `
+        <div class="item" data-day="${i}">
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <label class="switch" style="min-width:96px"><input type="checkbox" data-f="on" ${d.on ? "checked" : ""}> <b>${name}</b></label>
+            <label class="field" style="flex:1;min-width:104px"><span>من</span><input class="input" type="time" data-f="start" value="${esc(d.start)}" ${d.on ? "" : "disabled"}></label>
+            <label class="field" style="flex:1;min-width:104px"><span>إلى</span><input class="input" type="time" data-f="end" value="${esc(d.end)}" ${d.on ? "" : "disabled"}></label>
+            <button class="btn sm" data-copy="${i}" title="نسخ أوقات هذا اليوم إلى كل الأيام">نسخ للكل</button>
+          </div>
+          ${d.on ? "" : `<div class="small muted">بلا قيد في هذا اليوم</div>`}
+        </div>`; }).join("")}
+      </div>
+      <p class="small muted" style="margin:0">وقت البداية يجب أن يسبق النهاية في اليوم نفسه. قبل البداية وبعد النهاية تُعدّ الشاشة مغلقة.</p>
+    </div>
+    <div class="card stack">
+      <h2>ماذا يحدث بعد انتهاء الوقت؟</h2>
+      <label class="setting" style="cursor:pointer">
+        <input type="radio" name="scMode" value="allowed" ${sc.mode === "allowed" ? "checked" : ""}>
+        <div class="txt"><b>تعمل التطبيقات المسموحة فقط</b><span class="small muted">تُوقف كل التطبيقات ما عدا القائمة أدناه. الشاشة تبقى تعمل.</span></div>
+      </label>
+      <label class="setting" style="cursor:pointer">
+        <input type="radio" name="scMode" value="lock" ${sc.mode === "lock" ? "checked" : ""}>
+        <div class="txt"><b>قفل الشاشة بالكامل</b><span class="small muted">لا يستطيع الطفل فتح أي شيء حتى يبدأ الوقت التالي. يمكنك السماح مؤقتاً برمز المالك من الجهاز.</span></div>
+      </label>
+      <div ${sc.mode === "allowed" ? "" : 'style="opacity:.5"'}>
+        <h3>تطبيقات مسموحة بعد انتهاء الوقت <span class="muted small">(${allowed.size})</span></h3>
+        <input class="input" id="scQ" placeholder="ابحث عن تطبيق…" value="${esc(S.screenQ || "")}" style="margin-bottom:8px">
+        <div class="chips" id="scAllowed">
+          ${shown.map((a) => `<label class="chip" style="padding:4px 10px"><input type="checkbox" value="${esc(a.pkg)}" ${allowed.has(a.pkg) ? "checked" : ""}> ${esc(a.label)}</label>`).join("") || `<span class="muted small">${apps.length ? "لا نتائج" : "لا توجد قائمة تطبيقات بعد"}</span>`}
+        </div>
+        <p class="small muted" style="margin:8px 0 0">يُنصح بإضافة الاتصال والمدرسة والتطبيقات التعليمية.</p>
+      </div>
+    </div>
+  </div>`;
+
+  const saveAll = (next, msg = "تم الحفظ") => run(updateDoc(devRef(), { "policy.screen": next }), msg);
+  const rowDay = (row) => ({
+    on: row.querySelector('[data-f="on"]').checked,
+    start: row.querySelector('[data-f="start"]').value || SCREEN_DAY.start,
+    end: row.querySelector('[data-f="end"]').value || SCREEN_DAY.end,
+  });
+
+  document.getElementById("scOn").onchange = (e) => saveAll({ ...sc, enabled: e.target.checked });
+  el.querySelectorAll('input[name="scMode"]').forEach((r) => (r.onchange = () => saveAll({ ...sc, mode: r.value })));
+  el.querySelectorAll("[data-day]").forEach((row) => {
+    const i = Number(row.dataset.day);
+    row.querySelectorAll("[data-f]").forEach((inp) => (inp.onchange = () => {
+      const d = rowDay(row);
+      if (!dayValid(d)) { toast("وقت البداية يجب أن يسبق وقت النهاية"); renderDevice(); return; }
+      saveAll({ ...sc, days: { ...sc.days, [i]: d } });
+    }));
+    row.querySelector("[data-copy]").onclick = () => {
+      const d = rowDay(row);
+      if (!dayValid(d)) { toast("وقت البداية يجب أن يسبق وقت النهاية"); return; }
+      saveAll({ ...sc, days: Object.fromEntries([0, 1, 2, 3, 4, 5, 6].map((k) => [k, { ...d }])) }, "تم النسخ إلى كل الأيام");
+    };
+  });
+  document.getElementById("scQ").oninput = (e) => {
+    S.screenQ = e.target.value;
+    const pos = e.target.selectionStart;
+    renderDevice();
+    const inp = document.getElementById("scQ");
+    if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
+  };
+  document.getElementById("scAllowed").onchange = (e) => {
+    const pkg = e.target.value;
+    // make sure the schedule exists on the device, then add / remove the app
+    run((p.screen ? Promise.resolve() : updateDoc(devRef(), { "policy.screen": sc }))
+      .then(() => updateDoc(devRef(), { "policy.screen.allowed": e.target.checked ? arrayUnion(pkg) : arrayRemove(pkg) })), "تم الحفظ");
+  };
+}
+
 // ----- tab: web -----
 const PRESETS = {
   "التواصل الاجتماعي": ["facebook.com", "instagram.com", "tiktok.com", "snapchat.com", "x.com", "twitter.com", "threads.net"],
@@ -680,23 +795,80 @@ function approveRequest(id) {
 const rejectRequest = (id) =>
   run(updateDoc(doc(db, "devices", S.deviceId, "requests", id), { status: "rejected", doneAt: serverTimestamp() }), "تم الرفض");
 
+// ----- app requests (the child asks to open a blocked app) -----
+const WHY = {
+  blocked: "التطبيق محظور", limit: "انتهى الحد اليومي", bedtime: "وقت النوم", paused: "الأجهزة متوقفة", screen: "انتهى وقت الشاشة",
+};
+const reqRef = (id) => doc(db, "devices", S.deviceId, "requests", id);
+const markRequest = (id, status, extra = {}) => updateDoc(reqRef(id), { status, doneAt: serverTimestamp(), ...extra });
+
+/** Allow the app for a limited time (the device applies it right away through a command). */
+function approveAppTemp(id) {
+  const q = S.requests.find((x) => x.id === id);
+  if (!q || !q.pkg) return;
+  const minutes = Math.max(1, Number(pol().overrideMinutes) || 30);
+  run(Promise.all([
+    addDoc(collection(db, "devices", S.deviceId, "commands"), { type: "grant_app", pkg: q.pkg, minutes, status: "pending", createdAt: serverTimestamp() }),
+    markRequest(id, "approved", { grant: "temp" }),
+  ]), `تم السماح بـ ${q.label || q.pkg} لمدة ${mins(minutes)}`);
+}
+
+/** Allow the app for good: lift whatever blocked it (block, daily limit, bedtime or screen schedule). */
+function approveAppForever(id) {
+  const q = S.requests.find((x) => x.id === id);
+  if (!q || !q.pkg) return;
+  const pkg = q.pkg;
+  const ops = [];
+  if (q.why === "limit") ops.push(updateDoc(devRef(), new FieldPath("policy", "limits", pkg), deleteField()));
+  else if (q.why === "bedtime" || q.why === "paused") ops.push(updateDoc(devRef(), { "policy.bedtime.allowed": arrayUnion(pkg) }));
+  else if (q.why === "screen") {
+    const sc = screenOf(pol());
+    ops.push((pol().screen ? Promise.resolve() : updateDoc(devRef(), { "policy.screen": sc }))
+      .then(() => updateDoc(devRef(), { "policy.screen.allowed": arrayUnion(pkg) })));
+  } else ops.push(updateDoc(devRef(), { "policy.blocked": arrayRemove(pkg) }));
+  ops.push(markRequest(id, "approved", { grant: "forever" }));
+  run(Promise.all(ops), `تم السماح بـ ${q.label || pkg} بشكل دائم`);
+}
+
+const permLabel = (why) => ({
+  limit: "إلغاء الحد اليومي", bedtime: "سماح دائم وقت النوم", paused: "سماح دائم وقت النوم", screen: "سماح دائم بعد انتهاء الشاشة",
+}[why] || "رفع الحظر");
+
 // ----- tab: requests -----
 function tabRequests(el) {
   const link = (u) => (/^[a-z]+:\/\//i.test(u) ? u : "https://" + u);
-  el.innerHTML = `
-  <div class="card stack">
-    <h2>📨 طلبات الطفل للسماح بمواقع</h2>
-    <p class="small muted" style="margin:0">عندما يُمنع موقع، يستطيع الطفل إرسال طلب من جهازه. توافق أو ترفض من هنا. الموافقة تضيف الموقع إلى «المواقع المسموحة».</p>
-    ${S.requests.length ? `<div class="list">${S.requests.map((q) => `
+  const when = (q) => (q.ts ? esc(fmtDate.format(new Date(tsMs(q.ts)))) + " · " + esc(fmtTime.format(new Date(tsMs(q.ts)))) : "");
+  const isPcDev = isPc(dev());
+  const minutes = Math.max(1, Number(pol().overrideMinutes) || 30);
+  const row = (q) => q.kind === "app" ? `
+      <div class="item">
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <span style="min-width:0;flex:1">
+            <b>${isPcDev ? "🖥️" : "📱"} ${esc(q.label || q.pkg)}</b> <span class="muted small">يطلب فتح التطبيق</span>
+            <div class="muted small"><span class="mono">${esc(q.pkg || "")}</span> · ${esc(WHY[q.why] || "محجوب")} · ${when(q)}</div>
+          </span>
+          <button class="btn sm primary" data-temp="${esc(q.id)}">سماح ${esc(mins(minutes))}</button>
+          <button class="btn sm" data-forever="${esc(q.id)}" data-why="${esc(q.why || "")}">${esc(permLabel(q.why))}</button>
+          <button class="btn sm" data-reject="${esc(q.id)}">رفض</button>
+        </div>
+      </div>` : `
       <div class="item domain-row">
         <span style="min-width:0;display:flex;align-items:center;gap:8px">${favImg(q.domain)}
           <span style="min-width:0"><a class="mono" href="${esc(link(q.url || q.domain))}" target="_blank" rel="noopener" title="${esc(q.url || "")}">${esc(q.domain)}</a>
-          <div class="muted small">${q.ts ? esc(fmtDate.format(new Date(tsMs(q.ts)))) + " · " + esc(fmtTime.format(new Date(tsMs(q.ts)))) : ""}</div></span></span>
+          <div class="muted small">🌐 يطلب فتح موقع · ${when(q)}</div></span></span>
         <button class="btn sm primary" data-approve="${esc(q.id)}">سماح</button>
         <button class="btn sm" data-reject="${esc(q.id)}">رفض</button>
-      </div>`).join("")}</div>` : `<div class="empty">لا توجد طلبات حالياً</div>`}
+      </div>`;
+  el.innerHTML = `
+  <div class="card stack">
+    <h2>📨 طلبات الطفل</h2>
+    <p class="small muted" style="margin:0">يستطيع الطفل أن يطلب من جهازه <b>فتح موقع</b> محظور أو <b>فتح تطبيق</b> محظور (محظور، أو انتهى حدّه اليومي، أو وقت النوم، أو انتهاء وقت الشاشة).
+      موافقة الموقع تضيفه إلى «المواقع المسموحة». وموافقة التطبيق إما سماح مؤقت ${esc(mins(minutes))} أو سماح دائم برفع ما منعه.</p>
+    ${S.requests.length ? `<div class="list">${S.requests.map(row).join("")}</div>` : `<div class="empty">لا توجد طلبات حالياً</div>`}
   </div>`;
   el.querySelectorAll("[data-approve]").forEach((b) => (b.onclick = () => approveRequest(b.dataset.approve)));
+  el.querySelectorAll("[data-temp]").forEach((b) => (b.onclick = () => approveAppTemp(b.dataset.temp)));
+  el.querySelectorAll("[data-forever]").forEach((b) => (b.onclick = () => approveAppForever(b.dataset.forever)));
   el.querySelectorAll("[data-reject]").forEach((b) => (b.onclick = () => rejectRequest(b.dataset.reject)));
 }
 

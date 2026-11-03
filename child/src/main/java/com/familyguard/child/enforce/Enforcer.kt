@@ -73,14 +73,24 @@ object Enforcer {
     private fun overLimit(p: Policy, usage: Map<String, Int>): Set<String> =
         p.limits.filter { (pkg, lim) -> lim > 0 && (usage[pkg] ?: 0) >= lim }.keys
 
-    private fun allDown(p: Policy) = p.pauseAll || p.isBedtimeNow()
+    /**
+     * Apps that may still run while apps are shut down (pause, bedtime, or the screen schedule in
+     * "allowed apps only" mode), or null when apps are not shut down right now. When several rules
+     * apply at once, an app must be allowed by all of them.
+     */
+    fun downAllowed(p: Policy): Set<String>? {
+        var allowed: Set<String>? = null
+        if (p.pauseAll || p.isBedtimeNow()) allowed = p.bedAllowed
+        if (p.screenRestrictsApps()) allowed = allowed?.intersect(p.screenAllowed) ?: p.screenAllowed
+        return allowed
+    }
 
     fun desiredSuspended(ctx: Context, p: Policy, usage: Map<String, Int>): Set<String> {
         if (Guard.isPaused(ctx)) return emptySet()
         val s = HashSet<String>()
         s += p.blocked
         s += overLimit(p, usage)
-        if (allDown(p)) s += launchable(ctx) - p.bedAllowed
+        downAllowed(p)?.let { s += launchable(ctx) - it }
         s -= essentials(ctx)
         s.removeAll { Guard.isOverridden(it) }
         return s
@@ -117,8 +127,9 @@ object Enforcer {
         if (p.allowOnly && isUnsupportedBrowser(ctx, pkg)) return "browser"
         val lim = p.limits[pkg] ?: 0
         if (lim > 0 && (Guard.usageToday[pkg] ?: 0) >= lim) return "limit"
-        if (allDown(p) && pkg !in p.bedAllowed && pkg in launchable(ctx)) {
-            return if (p.pauseAll) "paused" else "bedtime"
+        val down = downAllowed(p)
+        if (down != null && pkg !in down && pkg in launchable(ctx)) {
+            return if (p.pauseAll) "paused" else if (p.isBedtimeNow()) "bedtime" else "screen"
         }
         return null
     }

@@ -222,16 +222,20 @@ internal sealed class BlockForm : HelperForm
     private readonly Label _app = MakeLabel("", 11);
     private readonly Label _msg = MakeLabel("", 10);
     private readonly TextBox _pin = new() { UseSystemPasswordChar = true, Width = 160, TextAlign = HorizontalAlignment.Center };
+    private readonly Button _ask = new() { Text = "📨 اطلب من المالك", AutoSize = true };
     private string _exe = "";
+    private string _label = "";
     private string _reason = "";
 
     public BlockForm(HttpClient http, uint session)
     {
         _http = http;
         _session = session;
+        ClientSize = new Size(580, 300); // wide enough for the PIN box and three buttons on one row
         var allow = new Button { Text = "سماح برمز المالك", AutoSize = true };
         var close = new Button { Text = "إغلاق", AutoSize = true };
         allow.Click += async (_, _) => await CheckPinAsync();
+        _ask.Click += async (_, _) => await AskOwnerAsync();
         close.Click += (_, _) => Hide();
         AcceptButton = allow;
         var row = new FlowLayoutPanel
@@ -239,10 +243,11 @@ internal sealed class BlockForm : HelperForm
             Dock = DockStyle.Top,
             Height = 48,
             FlowDirection = FlowDirection.RightToLeft,
-            Padding = new Padding(40, 8, 40, 0),
+            Padding = new Padding(16, 8, 16, 0),
         };
         row.Controls.Add(_pin);
         row.Controls.Add(allow);
+        row.Controls.Add(_ask);
         row.Controls.Add(close);
         _msg.ForeColor = Color.DimGray;
         Controls.Add(row);
@@ -263,13 +268,17 @@ internal sealed class BlockForm : HelperForm
     public void ShowFor(string exe, string label, string reason)
     {
         _exe = exe;
+        _label = label;
         _reason = reason;
+        _ask.Visible = reason != "pin" && reason != "browser";
+        _ask.Enabled = true;
         _title.Text = reason switch
         {
             "pin" => "🔒 هذا البرنامج مقفل",
             "limit" => "⏳ انتهى وقت الاستخدام لهذا اليوم",
             "bedtime" => "🌙 حان وقت النوم",
             "paused" => "⏸ الأجهزة متوقفة مؤقتاً",
+            "screen" => "🕒 انتهى وقت الشاشة",
             "browser" => "🌐 هذا المتصفح غير مسموح",
             _ => "🚫 هذا البرنامج محظور",
         };
@@ -280,6 +289,27 @@ internal sealed class BlockForm : HelperForm
         if (!Visible) Show();
         Activate();
         _pin.Focus();
+    }
+
+    /// <summary>Sends a request to the owner (parent app) to allow this program.</summary>
+    private async Task AskOwnerAsync()
+    {
+        _ask.Enabled = false;
+        try
+        {
+            var body = new JsonObject { ["kind"] = "app", ["exe"] = _exe, ["label"] = _label, ["reason"] = _reason };
+            var res = await _http.PostAsync($"request?s={_session}", new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"));
+            var ok = JsonNode.Parse(await res.Content.ReadAsStringAsync())?["ok"]?.GetValue<bool>() == true;
+            _msg.Text = ok ? "✅ تم إرسال الطلب إلى المالك. حاول فتح البرنامج بعد موافقته." : "تعذّر إرسال الطلب";
+            _msg.ForeColor = ok ? Color.SeaGreen : Color.Firebrick;
+            if (!ok) _ask.Enabled = true;
+        }
+        catch
+        {
+            _msg.Text = "تعذّر الاتصال بخدمة الحماية";
+            _msg.ForeColor = Color.Firebrick;
+            _ask.Enabled = true;
+        }
     }
 
     private async Task CheckPinAsync()

@@ -50,7 +50,7 @@ class GuardAccessibilityService : AccessibilityService() {
 
         // "Lock screen entirely": keep our full-screen lock on top until the parent releases it
         if (Guard.isHoldActive()) {
-            LockActivity.show(this, "", "hold")
+            LockActivity.show(this, "", Guard.holdReason())
             return
         }
 

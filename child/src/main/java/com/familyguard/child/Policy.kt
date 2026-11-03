@@ -34,7 +34,16 @@ data class Policy(
     val maxAttempts: Int = 5,
     val lockoutMinutes: Int = 5,
     val blockedPaths: Set<String> = emptySet(),
+    val screenEnabled: Boolean = false,
+    /** What happens when the screen window is over: "allowed" = only the allowed apps keep working, "lock" = lock the whole screen. */
+    val screenMode: String = "allowed",
+    val screenAllowed: Set<String> = emptySet(),
+    /** Per weekday (0 = Sunday ... 6 = Saturday): the time window in which the screen is open. */
+    val screenDays: Map<Int, ScreenDay> = emptyMap(),
 ) {
+    /** One weekday of the screen schedule. [on] false = no limit on that day. Minutes since midnight. */
+    data class ScreenDay(val on: Boolean, val start: Int, val end: Int)
+
     val needsVpn: Boolean get() = webFilter || webLog || safeSearch || blockYoutube || blockAds
 
     fun isBedtimeNow(): Boolean {
@@ -44,6 +53,38 @@ data class Policy(
         val c = Calendar.getInstance()
         val now = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
         return if (s == e) false else if (s < e) now in s until e else (now >= s || now < e)
+    }
+
+    private fun today(): ScreenDay? {
+        val c = Calendar.getInstance()
+        return screenDays[c.get(Calendar.DAY_OF_WEEK) - 1] // Calendar: SUNDAY = 1
+    }
+
+    /** True when today's screen window is over (or has not started yet). */
+    fun isScreenClosedNow(): Boolean {
+        if (!screenEnabled) return false
+        val d = today() ?: return false
+        if (!d.on || d.start >= d.end) return false
+        val c = Calendar.getInstance()
+        val now = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
+        return now < d.start || now >= d.end
+    }
+
+    /** The whole screen must be locked now. */
+    fun screenLocksNow() = screenMode == "lock" && isScreenClosedNow()
+
+    /** Only the allowed apps may run now. */
+    fun screenRestrictsApps() = screenMode != "lock" && isScreenClosedNow()
+
+    /** When the screen opens again, as text for the lock screen (e.g. "07:00"), or null. */
+    fun screenOpensText(): String? {
+        val d = today() ?: return null
+        val c = Calendar.getInstance()
+        val now = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
+        fun fmt(m: Int) = "%02d:%02d".format(m / 60, m % 60)
+        if (now < d.start) return fmt(d.start)
+        val next = screenDays[(c.get(Calendar.DAY_OF_WEEK) - 1 + 1) % 7]
+        return if (next != null && next.on && next.start < next.end) "غداً ${fmt(next.start)}" else "غداً"
     }
 
     companion object {
@@ -59,6 +100,7 @@ data class Policy(
         fun fromJson(o: JSONObject): Policy {
             val web = o.optJSONObject("web") ?: JSONObject()
             val bed = o.optJSONObject("bedtime") ?: JSONObject()
+            val screen = o.optJSONObject("screen") ?: JSONObject()
             return Policy(
                 blocked = o.optJSONArray("blocked").strings(),
                 hidden = o.optJSONArray("hidden").strings(),
@@ -87,7 +129,23 @@ data class Policy(
                 maxAttempts = o.optInt("maxAttempts", 5).coerceIn(0, 50),
                 lockoutMinutes = o.optInt("lockoutMinutes", 5).coerceIn(1, 1440),
                 blockedPaths = web.optJSONArray("blockedPaths").strings(),
+                screenEnabled = screen.optBoolean("enabled", false),
+                screenMode = if (screen.optString("mode", "allowed") == "lock") "lock" else "allowed",
+                screenAllowed = screen.optJSONArray("allowed").strings(),
+                screenDays = parseScreenDays(screen.optJSONObject("days")),
             )
+        }
+
+        private fun parseScreenDays(o: JSONObject?): Map<Int, ScreenDay> {
+            if (o == null) return emptyMap()
+            val out = HashMap<Int, ScreenDay>()
+            for (i in 0..6) {
+                val d = o.optJSONObject(i.toString()) ?: continue
+                val s = minutes(d.optString("start", "")) ?: continue
+                val e = minutes(d.optString("end", "")) ?: continue
+                out[i] = ScreenDay(d.optBoolean("on", true), s, e)
+            }
+            return out
         }
 
         /** Defaults written when a device is first linked. */
@@ -123,6 +181,12 @@ data class Policy(
                 "start" to "21:00",
                 "end" to "07:00",
                 "allowed" to emptyList<String>(),
+            ),
+            "screen" to mapOf(
+                "enabled" to false,
+                "mode" to "allowed",
+                "allowed" to emptyList<String>(),
+                "days" to (0..6).associate { it.toString() to mapOf("on" to true, "start" to "07:00", "end" to "21:00") },
             ),
             "pauseAll" to false,
             "lockNow" to false,

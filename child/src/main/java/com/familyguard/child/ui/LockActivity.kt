@@ -62,7 +62,7 @@ class LockActivity : ComponentActivity() {
         read(intent)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (reason != "hold") goHome() // the hold lock cannot be dismissed with Back
+                if (!isHold) goHome() // the full-screen lock cannot be dismissed with Back
             }
         })
         setContent { GuardTheme { Screen() } }
@@ -92,6 +92,12 @@ class LockActivity : ComponentActivity() {
     }.getOrDefault(pkg)
 
     private val isWeb get() = reason == "web" || reason == "request"
+
+    /** Whole-screen lock: set by the owner ("hold") or by the screen schedule ("screen_lock"). */
+    private val isHold get() = reason == "hold" || reason == "screen_lock"
+
+    /** Reasons for which the child can ask the owner to allow this app. */
+    private val canRequestApp get() = target.isNotBlank() && reason in setOf("blocked", "limit", "bedtime", "paused", "screen")
 
     private fun submit(pin: String) {
         if (Guard.policy.pinHash.isEmpty()) {
@@ -124,7 +130,7 @@ class LockActivity : ComponentActivity() {
         Events.log("unlock", if (isWeb) target else appLabel(target), reason)
         when (reason) {
             "pin", "ytsettings" -> Guard.unlockedUntil[target] = now + unlockMs
-            "hold" -> Guard.lockHoldSuppressedUntil = now + overrideMs
+            "hold", "screen_lock" -> Guard.lockHoldSuppressedUntil = now + overrideMs
             "web" -> Guard.overrideUntil["web:$target"] = now + overrideMs
             else -> {
                 Guard.overrideUntil[target] = now + overrideMs
@@ -162,6 +168,24 @@ class LockActivity : ComponentActivity() {
             .addOnFailureListener { requestState = "error" }
     }
 
+    /** Sends devices/{id}/requests/app_{pkg}: the child asks the owner to allow this app (shown in the parent's requests tab). */
+    private fun sendAppRequest() {
+        val id = Prefs(this).deviceId ?: run { requestState = "error"; return }
+        val pkg = target
+        requestState = "sending"
+        Repo.device(id).collection("requests").document("app_$pkg").set(
+            mapOf(
+                "kind" to "app",
+                "pkg" to pkg,
+                "label" to appLabel(pkg),
+                "why" to reason,
+                "status" to "pending",
+                "ts" to FieldValue.serverTimestamp(),
+            )
+        ).addOnSuccessListener { requestState = "sent" }
+            .addOnFailureListener { requestState = "error" }
+    }
+
     @Composable
     private fun Screen() {
         val (icon, title) = when (reason) {
@@ -171,6 +195,8 @@ class LockActivity : ComponentActivity() {
             "bedtime" -> "🌙" to "حان وقت النوم"
             "paused" -> "⏸" to "الأجهزة متوقفة مؤقتاً"
             "hold" -> "🔒" to "الجهاز مقفل من قبل المالك"
+            "screen" -> "🕒" to "انتهى وقت الشاشة"
+            "screen_lock" -> "🕒" to "انتهى وقت الشاشة"
             "browser" -> "🌐" to "هذا المتصفح غير مسموح"
             "web" -> "🚫" to "هذا الموقع غير مسموح"
             "request" -> "📨" to "طلب السماح بموقع"
@@ -179,6 +205,8 @@ class LockActivity : ComponentActivity() {
         val name = when (reason) {
             "web" -> target
             "request", "hold" -> ""
+            "screen_lock" -> Guard.policy.screenOpensText()?.let { "تفتح الشاشة: $it" } ?: ""
+            "screen" -> appLabel(target) + (Guard.policy.screenOpensText()?.let { " — تفتح الشاشة: $it" } ?: "")
             "ytsettings" -> "أدخل رمز المالك لفتحها ${Guard.policy.unlockMinutes} دقيقة"
             "browser" -> appLabel(target) + " — استعمل متصفحاً مدعوماً مثل Chrome"
             else -> appLabel(target)
@@ -201,8 +229,11 @@ class LockActivity : ComponentActivity() {
 
                     if (isWeb) RequestBox()
 
-                    if (reason == "hold") {
-                        Text("سيُرفع القفل عندما يسمح المالك من تطبيقه.", fontSize = 14.sp, textAlign = TextAlign.Center)
+                    if (isHold) {
+                        Text(
+                            if (reason == "hold") "سيُرفع القفل عندما يسمح المالك من تطبيقه." else "يمكن للمالك السماح مؤقتاً بالرمز.",
+                            fontSize = 14.sp, textAlign = TextAlign.Center,
+                        )
                         Spacer(Modifier.height(16.dp))
                         if (showPin) {
                             PinPad(error) { submit(it) }
@@ -210,6 +241,7 @@ class LockActivity : ComponentActivity() {
                             TextButton(onClick = { showPin = true }) { Text("🔑 رمز المالك") }
                         }
                     } else if (reason != "request") {
+                        if (canRequestApp) AppRequestBox()
                         if (reason == "pin" || reason == "ytsettings" || showPin) {
                             if (reason != "pin" && reason != "ytsettings") {
                                 Text("يمكن للمالك السماح مؤقتاً لمدة ${Guard.policy.overrideMinutes} دقيقة", fontSize = 14.sp)
@@ -225,6 +257,23 @@ class LockActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    @Composable
+    private fun AppRequestBox() {
+        when (requestState) {
+            "sent" -> Text("✅ تم إرسال الطلب إلى المالك. حاول فتح التطبيق بعد موافقته.", color = MaterialTheme.colorScheme.primary, textAlign = TextAlign.Center)
+            "error" -> Text("تعذّر الإرسال. تأكد من الاتصال بالإنترنت.", color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+        }
+        if (requestState != "sent") {
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { sendAppRequest() },
+                enabled = requestState != "sending",
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (requestState == "sending") "جارٍ الإرسال..." else "📨 اطلب من المالك فتح التطبيق") }
+        }
+        Spacer(Modifier.height(16.dp))
     }
 
     @Composable

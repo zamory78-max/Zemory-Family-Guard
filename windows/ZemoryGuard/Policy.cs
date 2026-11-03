@@ -34,6 +34,12 @@ internal sealed class Policy
     public int OverrideMinutes = 30;
     public int UnlockMinutes = 10;
     public HashSet<string> BlockedPaths = new(Ci);
+    public bool ScreenEnabled;
+    /// <summary>"allowed" = only the allowed apps keep working when the window is over, "lock" = lock the whole screen.</summary>
+    public string ScreenMode = "allowed";
+    public HashSet<string> ScreenAllowed = new(Ci);
+    /// <summary>Per weekday (0 = Sunday ... 6 = Saturday): on, start and end in minutes since midnight.</summary>
+    public Dictionary<int, (bool on, int start, int end)> ScreenDays = new();
     public string Raw = "";
 
     public bool Restricted(string key) => Restrictions.TryGetValue(key, out var v) && v;
@@ -43,6 +49,7 @@ internal sealed class Policy
         o ??= new JsonObject();
         var web = o["web"] as JsonObject ?? new JsonObject();
         var bed = o["bedtime"] as JsonObject ?? new JsonObject();
+        var screen = o["screen"] as JsonObject ?? new JsonObject();
         var p = new Policy
         {
             Blocked = Set(o["blocked"]),
@@ -65,8 +72,15 @@ internal sealed class Policy
             OverrideMinutes = (int)(Num(o["overrideMinutes"]) ?? 30),
             UnlockMinutes = (int)(Num(o["unlockMinutes"]) ?? 10),
             BlockedPaths = Set(web["blockedPaths"]),
+            ScreenEnabled = Bool(screen["enabled"], false),
+            ScreenMode = Str(screen["mode"], "allowed") == "lock" ? "lock" : "allowed",
+            ScreenAllowed = Set(screen["allowed"]),
             Raw = o.ToJsonString(),
         };
+        if (screen["days"] is JsonObject days)
+            for (var i = 0; i < 7; i++)
+                if (days[i.ToString()] is JsonObject d && Minutes(Str(d["start"])) is { } st && Minutes(Str(d["end"])) is { } en)
+                    p.ScreenDays[i] = (Bool(d["on"], true), st, en);
         if (p.BlockYoutube)
         {
             p.WebFilter = true;
@@ -94,6 +108,32 @@ internal sealed class Policy
         if (s == null || e == null || s == e) return false;
         var now = DateTime.Now.Hour * 60 + DateTime.Now.Minute;
         return s < e ? now >= s && now < e : now >= s || now < e;
+    }
+
+    /// <summary>True when today's screen window is over (or has not started yet).</summary>
+    public bool IsScreenClosedNow()
+    {
+        if (!ScreenEnabled) return false;
+        var n = DateTime.Now;
+        if (!ScreenDays.TryGetValue((int)n.DayOfWeek, out var d) || !d.on || d.start >= d.end) return false;
+        var now = n.Hour * 60 + n.Minute;
+        return now < d.start || now >= d.end;
+    }
+
+    /// <summary>The whole screen must be locked now (owner "lock now" is handled separately).</summary>
+    public bool ScreenLocksNow() => ScreenMode == "lock" && IsScreenClosedNow();
+
+    /// <summary>
+    /// Apps that may still run while apps are shut down (pause, bedtime, or the screen schedule in
+    /// "allowed apps only" mode), or null when apps are not shut down. An app must be allowed by every rule that applies.
+    /// </summary>
+    public HashSet<string>? DownAllowed()
+    {
+        HashSet<string>? allowed = null;
+        if (PauseAll || IsBedtimeNow()) allowed = BedAllowed;
+        if (ScreenMode != "lock" && IsScreenClosedNow())
+            allowed = allowed == null ? ScreenAllowed : new HashSet<string>(allowed.Intersect(ScreenAllowed, Ci), Ci);
+        return allowed;
     }
 
     public bool CheckPin(string pin)
