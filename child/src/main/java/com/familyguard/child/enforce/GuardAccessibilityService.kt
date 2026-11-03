@@ -22,6 +22,9 @@ class GuardAccessibilityService : AccessibilityService() {
         val e = event ?: return
         val pkg = e.packageName?.toString() ?: return
         if (pkg in YOUTUBE_PKGS) checkYoutubeSettings(e)
+        if (e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || e.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            runCatching { ActivityWatcher.onEvent(this, pkg) { appLabel(pkg) } }
+        }
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 onForeground(pkg)

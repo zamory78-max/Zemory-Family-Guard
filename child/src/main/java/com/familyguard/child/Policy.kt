@@ -40,6 +40,9 @@ data class Policy(
     val screenAllowed: Set<String> = emptySet(),
     /** Per weekday (0 = Sunday ... 6 = Saturday): the time window in which the screen is open. */
     val screenDays: Map<Int, ScreenDay> = emptyMap(),
+    /** Log where the child goes inside the chosen apps (approximate, from the accessibility service). */
+    val activityEnabled: Boolean = false,
+    val activityApps: Set<String> = emptySet(),
 ) {
     /** One weekday of the screen schedule. [on] false = no limit on that day. Minutes since midnight. */
     data class ScreenDay(val on: Boolean, val start: Int, val end: Int)
@@ -101,6 +104,7 @@ data class Policy(
             val web = o.optJSONObject("web") ?: JSONObject()
             val bed = o.optJSONObject("bedtime") ?: JSONObject()
             val screen = o.optJSONObject("screen") ?: JSONObject()
+            val activity = o.optJSONObject("activity") ?: JSONObject()
             return Policy(
                 blocked = o.optJSONArray("blocked").strings(),
                 hidden = o.optJSONArray("hidden").strings(),
@@ -133,6 +137,8 @@ data class Policy(
                 screenMode = if (screen.optString("mode", "allowed") == "lock") "lock" else "allowed",
                 screenAllowed = screen.optJSONArray("allowed").strings(),
                 screenDays = parseScreenDays(screen.optJSONObject("days")),
+                activityEnabled = activity.optBoolean("enabled", false),
+                activityApps = activity.optJSONArray("apps").strings(),
             )
         }
 
@@ -188,6 +194,7 @@ data class Policy(
                 "allowed" to emptyList<String>(),
                 "days" to (0..6).associate { it.toString() to mapOf("on" to true, "start" to "07:00", "end" to "21:00") },
             ),
+            "activity" to mapOf("enabled" to false, "apps" to emptyList<String>()),
             "pauseAll" to false,
             "lockNow" to false,
             "overrideMinutes" to 30,

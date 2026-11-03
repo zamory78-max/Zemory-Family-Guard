@@ -227,7 +227,7 @@ function openDevice(id) {
   }));
   S.events = [];
   S.unsubDetail.push(onSnapshot(
-    query(collection(db, "devices", id, "events"), orderBy("t", "desc"), limit(200)),
+    query(collection(db, "devices", id, "events"), orderBy("t", "desc"), limit(300)),
     (qs) => { S.events = qs.docs.map((d) => ({ id: d.id, ...d.data() })); if (S.tab === "reports") renderDevice(); },
   ));
   listenWeb();
@@ -329,6 +329,7 @@ const DEFAULT_POLICY = {
   },
   web: { filter: false, log: true, safeSearch: false, blockYoutube: false, blockAds: false, blocked: [], allowOnly: false, allowed: [], blockedPaths: [] },
   bedtime: { enabled: false, start: "21:00", end: "07:00", allowed: [] },
+  activity: { enabled: false, apps: [] },
   screen: { enabled: false, mode: "allowed", allowed: [], days: Object.fromEntries([0, 1, 2, 3, 4, 5, 6].map((i) => [String(i), { on: true, start: "07:00", end: "21:00" }])) },
   pauseAll: false, lockNow: false, overrideMinutes: 30, unlockMinutes: 10, maxAttempts: 5, lockoutMinutes: 5,
 };
@@ -875,7 +876,7 @@ function tabRequests(el) {
 
 // ----- tab: reports -----
 const EV = {
-  block: ["⛔", "حظر تطبيق"], web: ["🚫", "موقع محظور"], unlock: ["🔓", "سماح برمز المالك"],
+  activity: ["🧭", "نشاط داخل تطبيق"], block: ["⛔", "حظر تطبيق"], web: ["🚫", "موقع محظور"], unlock: ["🔓", "سماح برمز المالك"],
   tamper: ["⚠️", "تغيّر في الحماية"], safemode: ["🟠", "الوضع الآمن"], boot: ["🔄", "تشغيل الجهاز"], hold: ["🔒", "قفل الشاشة"], lockout: ["⛔", "محاولات رمز خاطئة كثيرة"],
 };
 function tabReports(el) {
@@ -886,9 +887,28 @@ function tabReports(el) {
   let doms = Object.entries(data.domains || {}).map(([name, v]) => ({ name, c: v.c || 0, b: !!v.b }));
   doms = doms.filter((x) => !SYSTEM_DOMAIN.test(x.name));
   const blockedHits = doms.filter((x) => x.b);
-  const evs = S.events || [];
+  const allEvs = S.events || [];
+  const evs = allEvs.filter((e) => e.type !== "activity");
+  const acts = allEvs.filter((e) => e.type === "activity");
   const safeCount = evs.filter((e) => e.type === "safemode").length;
   const tamperCount = evs.filter((e) => e.type === "tamper" && e.detail === "off").length;
+
+  const act = (pol().activity) || { enabled: false, apps: [] };
+  const actApps = new Set(act.apps || []);
+  const FB = ["com.facebook.katana", "com.facebook.lite"];
+  const actChoices = appList().filter((x) => x.launchable && (FB.includes(x.pkg) || actApps.has(x.pkg) || /facebook|instagram|tiktok|snapchat|messenger|twitter|whatsapp|telegram/i.test(x.pkg)));
+  const actCard = isPc(d) ? "" : `
+    <div class="card stack">
+      <div class="setting">
+        <div class="txt"><b>🧭 نشاط الطفل داخل التطبيقات</b><span class="small muted">تقريبي: يسجّل عناوين الصفحات/المجموعات/الحسابات التي يفتحها ونص البحث داخل التطبيق المختار (مثل فيسبوك). لا يسجّل محتوى المحادثات ولا كلمات المرور.</span></div>
+        <label class="switch"><input type="checkbox" id="actOn" ${act.enabled ? "checked" : ""}></label>
+      </div>
+      <div class="chips" id="actApps">
+        ${actChoices.map((x) => `<label class="chip" style="padding:4px 10px"><input type="checkbox" value="${esc(x.pkg)}" ${actApps.has(x.pkg) ? "checked" : ""}> ${esc(x.label)}</label>`).join("") || `<span class="muted small">لا توجد تطبيقات مناسبة بعد (يظهر فيسبوك هنا عند تثبيته)</span>`}
+      </div>
+      ${acts.length ? `<div class="list">${acts.slice(0, 80).map((e) => `<div class="item"><div class="row"><b style="margin:0 6px">${esc(e.label || "")}</b><span class="small">${esc(e.detail || "")}</span><span class="spacer"></span><span class="muted small">${e.t ? esc(fmtTime.format(new Date(e.t))) : ""}</span></div></div>`).join("")}</div>` : `<div class="empty">لا يوجد نشاط مسجّل بعد</div>`}
+      <p class="small muted" style="margin:0">يعمل على أندرويد فقط، ويصل السجل بعد عدة دقائق. الدقة تتفاوت حسب إصدار التطبيق.</p>
+    </div>`;
 
   el.innerHTML = `
   <div class="cols">
@@ -911,7 +931,17 @@ function tabReports(el) {
         return `<div class="item"><div class="row"><span>${ic}</span><b style="margin:0 6px">${esc(def)}</b><span class="muted small">${esc(e.label || "")}${extra}</span><span class="spacer"></span><span class="muted small">${e.t ? esc(fmtTime.format(new Date(e.t))) : ""}</span></div></div>`;
       }).join("")}</div>` : `<div class="empty">لا توجد أحداث بعد</div>`}
     </div>
+    ${actCard}
   </div>`;
+  const aOn = document.getElementById("actOn");
+  if (aOn) {
+    const save = (next) => run(updateDoc(devRef(), { "policy.activity": next }), "تم الحفظ");
+    aOn.onchange = () => save({ enabled: aOn.checked, apps: [...actApps] });
+    el.querySelectorAll("#actApps input").forEach((c) => (c.onchange = () => {
+      c.checked ? actApps.add(c.value) : actApps.delete(c.value);
+      save({ enabled: aOn.checked, apps: [...actApps] });
+    }));
+  }
 }
 
 function tabWeb(el) {
