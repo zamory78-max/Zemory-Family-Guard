@@ -415,7 +415,9 @@ internal sealed class AgentService : BackgroundService
                 // the parent approved a child's request to open a program, for a limited time
                 var exe = (c["pkg"]?.GetValue<string>() ?? throw new Exception("لا يوجد تطبيق")).ToLowerInvariant();
                 var mins = c["minutes"] is JsonValue mv && mv.TryGetValue<long>(out var ml) ? (int)Math.Clamp(ml, 1, 1440) : _policy.OverrideMinutes;
-                _overrideUntil[exe] = DateTime.UtcNow.AddMinutes(mins);
+                var until = DateTime.UtcNow.AddMinutes(mins);
+                _overrideUntil[exe] = until;   // blocked / limit / bedtime / screen
+                _unlockedUntil[exe] = until;   // PIN-locked program
                 return "تم";
             }
             default:

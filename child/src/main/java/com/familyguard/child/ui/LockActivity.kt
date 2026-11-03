@@ -97,7 +97,7 @@ class LockActivity : ComponentActivity() {
     private val isHold get() = reason == "hold" || reason == "screen_lock"
 
     /** Reasons for which the child can ask the owner to allow this app. */
-    private val canRequestApp get() = target.isNotBlank() && reason in setOf("blocked", "limit", "bedtime", "paused", "screen")
+    private val canRequestApp get() = target.isNotBlank() && reason in setOf("blocked", "limit", "bedtime", "paused", "screen", "pin")
 
     private fun submit(pin: String) {
         if (Guard.policy.pinHash.isEmpty()) {

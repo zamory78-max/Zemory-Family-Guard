@@ -797,7 +797,7 @@ const rejectRequest = (id) =>
 
 // ----- app requests (the child asks to open a blocked app) -----
 const WHY = {
-  blocked: "التطبيق محظور", limit: "انتهى الحد اليومي", bedtime: "وقت النوم", paused: "الأجهزة متوقفة", screen: "انتهى وقت الشاشة",
+  blocked: "التطبيق محظور", pin: "التطبيق مقفل برمز", limit: "انتهى الحد اليومي", bedtime: "وقت النوم", paused: "الأجهزة متوقفة", screen: "انتهى وقت الشاشة",
 };
 const reqRef = (id) => doc(db, "devices", S.deviceId, "requests", id);
 const markRequest = (id, status, extra = {}) => updateDoc(reqRef(id), { status, doneAt: serverTimestamp(), ...extra });
@@ -819,7 +819,8 @@ function approveAppForever(id) {
   if (!q || !q.pkg) return;
   const pkg = q.pkg;
   const ops = [];
-  if (q.why === "limit") ops.push(updateDoc(devRef(), new FieldPath("policy", "limits", pkg), deleteField()));
+  if (q.why === "pin") ops.push(updateDoc(devRef(), { "policy.pinLocked": arrayRemove(pkg) }));
+  else if (q.why === "limit") ops.push(updateDoc(devRef(), new FieldPath("policy", "limits", pkg), deleteField()));
   else if (q.why === "bedtime" || q.why === "paused") ops.push(updateDoc(devRef(), { "policy.bedtime.allowed": arrayUnion(pkg) }));
   else if (q.why === "screen") {
     const sc = screenOf(pol());
@@ -831,7 +832,7 @@ function approveAppForever(id) {
 }
 
 const permLabel = (why) => ({
-  limit: "إلغاء الحد اليومي", bedtime: "سماح دائم وقت النوم", paused: "سماح دائم وقت النوم", screen: "سماح دائم بعد انتهاء الشاشة",
+  pin: "إزالة القفل برمز", limit: "إلغاء الحد اليومي", bedtime: "سماح دائم وقت النوم", paused: "سماح دائم وقت النوم", screen: "سماح دائم بعد انتهاء الشاشة",
 }[why] || "رفع الحظر");
 
 // ----- tab: requests -----

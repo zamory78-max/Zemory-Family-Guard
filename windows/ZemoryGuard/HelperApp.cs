@@ -270,7 +270,7 @@ internal sealed class BlockForm : HelperForm
         _exe = exe;
         _label = label;
         _reason = reason;
-        _ask.Visible = reason != "pin" && reason != "browser";
+        _ask.Visible = reason != "browser";
         _ask.Enabled = true;
         _title.Text = reason switch
         {

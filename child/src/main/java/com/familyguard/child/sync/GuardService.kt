@@ -153,7 +153,9 @@ class GuardService : Service() {
                     // the parent approved a child's request to open an app, for a limited time
                     val p = pkg ?: error("لا يوجد تطبيق")
                     val mins = (doc.getLong("minutes") ?: Guard.policy.overrideMinutes.toLong()).coerceIn(1L, 1440L)
-                    Guard.overrideUntil[p] = System.currentTimeMillis() + mins * 60_000L
+                    val until = System.currentTimeMillis() + mins * 60_000L
+                    Guard.overrideUntil[p] = until   // blocked / limit / bedtime / screen
+                    Guard.unlockedUntil[p] = until   // PIN-locked app
                     Enforcer.apply(this)
                 }
                 "reboot" -> {
