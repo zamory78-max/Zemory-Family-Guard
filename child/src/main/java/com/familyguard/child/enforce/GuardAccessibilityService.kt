@@ -130,9 +130,26 @@ class GuardAccessibilityService : AccessibilityService() {
         }
     }
 
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        connected = true
+    }
+
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        connected = false
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        connected = false
+        super.onDestroy()
+    }
+
     override fun onInterrupt() {}
 
     companion object {
+        /** True only while Android really has this service bound (the setting string alone proves nothing). */
+        @Volatile var connected = false
         const val YT_SETTINGS = "youtube-settings"
         val YOUTUBE_PKGS = setOf(
             "com.google.android.youtube", "com.google.android.apps.youtube.kids", "com.google.android.youtube.tv",

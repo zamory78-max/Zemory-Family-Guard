@@ -34,7 +34,7 @@ object UsageWatcher {
     private var lastEv = ""
 
     /** True when this fallback is doing the work (accessibility off, usage access on). */
-    fun active(ctx: Context): Boolean = !Dpm.isAccessibilityOn(ctx) && (hasDump(ctx) || Dpm.hasUsageAccess(ctx))
+    fun active(ctx: Context): Boolean = !GuardAccessibilityService.connected && (hasDump(ctx) || Dpm.hasUsageAccess(ctx))
 
     private fun hasDump(ctx: Context) =
         ctx.checkSelfPermission("android.permission.DUMP") == PackageManager.PERMISSION_GRANTED
