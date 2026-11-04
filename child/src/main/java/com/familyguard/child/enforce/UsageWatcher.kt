@@ -4,6 +4,7 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.provider.Settings
+import android.util.Log
 import com.familyguard.child.Guard
 import com.familyguard.child.admin.Dpm
 import com.familyguard.child.sync.Events
@@ -26,6 +27,9 @@ object UsageWatcher {
     private var fg: String? = null
     private var lastShownPkg = ""
     private var lastShownAt = 0L
+    private var lastDbg = 0L
+    private var evCount = 0
+    private var lastEv = ""
 
     /** True when this fallback is doing the work (accessibility off, usage access on). */
     fun active(ctx: Context): Boolean = !Dpm.isAccessibilityOn(ctx) && Dpm.hasUsageAccess(ctx)
@@ -36,7 +40,13 @@ object UsageWatcher {
             return
         }
         refreshForeground(ctx)
-        val pkg = fg ?: return
+        val pkg = fg
+        val t = System.currentTimeMillis()
+        if (t - lastDbg > 5_000L) {
+            lastDbg = t
+            Log.i("ZemoryUW", "fg=$pkg blocked=${Guard.policy.blocked.size} reason=${pkg?.let { Enforcer.blockReason(ctx, it) }} paused=${Guard.isPaused(ctx)} evCount=$evCount lastEv=$lastEv")
+        }
+        if (pkg == null) return
         if (pkg == ctx.packageName || pkg == "com.android.systemui" || pkg == "android") return
         val ime = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
         if (ime != null && ime.startsWith("$pkg/")) return
@@ -53,6 +63,7 @@ object UsageWatcher {
         if (reason != null) {
             remember(pkg, now)
             Events.log("block", label(ctx, pkg), reason)
+            Log.i("ZemoryUW", "show lock for $pkg ($reason)")
             LockActivity.show(ctx, pkg, reason)
             return
         }
@@ -84,6 +95,8 @@ object UsageWatcher {
         while (events.hasNextEvent()) {
             events.getNextEvent(e)
             val p = e.packageName ?: continue
+            evCount++
+            lastEv = "${e.eventType}:$p"
             when (e.eventType) {
                 RESUMED -> fg = p
                 PAUSED -> if (fg == p) fg = null
