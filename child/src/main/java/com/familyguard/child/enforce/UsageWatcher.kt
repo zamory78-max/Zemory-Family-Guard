@@ -29,6 +29,7 @@ object UsageWatcher {
     private var lastShownPkg = ""
     private var lastShownAt = 0L
     private var lastDbg = 0L
+    private var lastDumpLog = 0L
     private var evCount = 0
     private var lastEv = ""
 
@@ -90,16 +91,23 @@ object UsageWatcher {
     private fun dumpForeground(): String? {
         var proc: Process? = null
         return try {
-            proc = Runtime.getRuntime().exec(arrayOf("dumpsys", "activity", "activities"))
+            proc = ProcessBuilder("dumpsys", "activity", "activities").redirectErrorStream(true).start()
             val re = Regex("(?:topResumedActivity|mResumedActivity)[^\\n]*? u\\d+ ([\\w.]+)/")
             var found: String? = null
+            val head = StringBuilder()
+            var n = 0
             proc.inputStream.bufferedReader().useLines { lines ->
                 for (l in lines) {
+                    if (n++ < 3) head.append(l.take(160)).append(" | ")
                     if (l.contains("ResumedActivity")) {
                         val m = re.find(l)
                         if (m != null) { found = m.groupValues[1]; break }
                     }
                 }
+            }
+            if (found == null && System.currentTimeMillis() - lastDumpLog > 20_000L) {
+                lastDumpLog = System.currentTimeMillis()
+                Log.w("ZemoryUW", "dump no match, lines=$n head=$head")
             }
             found
         } catch (e: Exception) {
