@@ -3,6 +3,7 @@ package com.familyguard.child.enforce
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.provider.Settings
 import android.util.Log
 import com.familyguard.child.Guard
@@ -32,7 +33,10 @@ object UsageWatcher {
     private var lastEv = ""
 
     /** True when this fallback is doing the work (accessibility off, usage access on). */
-    fun active(ctx: Context): Boolean = !Dpm.isAccessibilityOn(ctx) && Dpm.hasUsageAccess(ctx)
+    fun active(ctx: Context): Boolean = !Dpm.isAccessibilityOn(ctx) && (hasDump(ctx) || Dpm.hasUsageAccess(ctx))
+
+    private fun hasDump(ctx: Context) =
+        ctx.checkSelfPermission("android.permission.DUMP") == PackageManager.PERMISSION_GRANTED
 
     fun tick(ctx: Context) {
         if (!active(ctx)) {
@@ -82,7 +86,36 @@ object UsageWatcher {
         ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(pkg, 0)).toString()
     }.getOrDefault(pkg)
 
+    /** Some TV ROMs record no activity events; with the DUMP permission (adb pm grant) ask the system for the resumed activity. */
+    private fun dumpForeground(): String? {
+        var proc: Process? = null
+        return try {
+            proc = Runtime.getRuntime().exec(arrayOf("dumpsys", "activity", "activities"))
+            val re = Regex("(?:topResumedActivity|mResumedActivity)[^\\n]*? u\\d+ ([\\w.]+)/")
+            var found: String? = null
+            proc.inputStream.bufferedReader().useLines { lines ->
+                for (l in lines) {
+                    if (l.contains("ResumedActivity")) {
+                        val m = re.find(l)
+                        if (m != null) { found = m.groupValues[1]; break }
+                    }
+                }
+            }
+            found
+        } catch (e: Exception) {
+            Log.w("ZemoryUW", "dump failed: $e")
+            null
+        } finally {
+            runCatching { proc?.destroy() }
+        }
+    }
+
     private fun refreshForeground(ctx: Context) {
+        if (hasDump(ctx)) {
+            val p = dumpForeground()
+            if (p != null) { fg = p; evCount++; lastEv = "dump:$p" }
+            return
+        }
         val usm = ctx.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return
         val now = System.currentTimeMillis()
         val from = if (lastQuery == 0L) now - 60_000L else lastQuery - 1_000L
