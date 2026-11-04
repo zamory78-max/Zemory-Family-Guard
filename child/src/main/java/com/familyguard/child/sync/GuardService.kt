@@ -23,6 +23,7 @@ import com.familyguard.child.apps.AppInventory
 import com.familyguard.child.apps.Installer
 import com.familyguard.child.enforce.Enforcer
 import com.familyguard.child.enforce.UsageTracker
+import com.familyguard.child.enforce.UsageWatcher
 import com.familyguard.child.ui.LockActivity
 import com.familyguard.child.ui.MainActivity
 import com.familyguard.child.web.MediaWatcher
@@ -66,6 +67,7 @@ class GuardService : Service() {
         scope.launch { runCatching { applyAll() } }
         listen()
         loop()
+        fastWatch()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -208,6 +210,17 @@ class GuardService : Service() {
                 if (tick % 5 == 2) runCatching { Events.flush(ctx) }.onFailure { Log.w(TAG, "events", it) }
                 tick++
                 delay(60_000L)
+            }
+        }
+    }
+
+    /** Fallback when the accessibility service cannot be enabled (some TV boxes): watch the foreground app by usage events. */
+    private fun fastWatch() {
+        val ctx = this
+        scope.launch {
+            while (isActive) {
+                runCatching { UsageWatcher.tick(ctx) }.onFailure { Log.w(TAG, "usagewatch", it) }
+                delay(1_500L)
             }
         }
     }
