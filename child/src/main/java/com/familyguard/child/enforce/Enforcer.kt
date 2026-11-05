@@ -17,7 +17,7 @@ import com.familyguard.child.admin.Dpm
 object Enforcer {
     private const val TAG = "FG-Enforcer"
 
-    val SETTINGS_PKGS = setOf("com.android.settings", "com.android.tv.settings")
+    val SETTINGS_PKGS = setOf("com.android.settings", "com.android.tv.settings", "com.droidlogic.tv.settings", "com.droidlogic.settings")
 
     private var cacheAt = 0L
     private var launchableCache: Set<String> = emptySet()
