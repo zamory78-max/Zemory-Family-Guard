@@ -16,6 +16,7 @@ import com.familyguard.child.web.WebLog
 class GuardAccessibilityService : AccessibilityService() {
 
     private var lastUrlCheck = 0L
+    private var lastFgCheck = 0L
     private var lastUrl = ""
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -31,6 +32,14 @@ class GuardAccessibilityService : AccessibilityService() {
                 if (BROWSERS.containsKey(pkg)) checkUrl(pkg)
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                // An app that was already open when it got blocked (or kept open behind the lock screen) sends no
+                // window-change event, so look again every ~2 s while it is the active window.
+                val t = System.currentTimeMillis()
+                if (t - lastFgCheck > 2_000L) {
+                    lastFgCheck = t
+                    val active = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
+                    if (active == pkg) onForeground(pkg)
+                }
                 if (BROWSERS.containsKey(pkg)) {
                     val now = System.currentTimeMillis()
                     if (now - lastUrlCheck > 1500) {
