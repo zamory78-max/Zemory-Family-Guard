@@ -110,9 +110,15 @@ jobs:
           path: dist/hosting
 
   windows:
+    needs: build
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: hosting
+          path: hosting
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -148,10 +154,23 @@ jobs:
           Copy-Item windows/install.bat, windows/uninstall.bat pkg/
           Compress-Archive -Path pkg/* -DestinationPath ZemoryGuard-Windows.zip -Force
 
+      - name: Build Windows parent app
+        run: dotnet publish windows/ZemoryParent/ZemoryParent.csproj -c Release -o outp
+
+      - name: Package parent app
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force pkgp/web | Out-Null
+          Copy-Item outp/ZemoryParent.exe pkgp/
+          Get-ChildItem hosting -Exclude apk | Copy-Item -Destination pkgp/web -Recurse -Force
+          Compress-Archive -Path pkgp/* -DestinationPath ZemoryParent-Windows.zip -Force
+
       - uses: actions/upload-artifact@v4
         with:
           name: FamilyGuard-Windows
-          path: ZemoryGuard-Windows.zip
+          path: |
+            ZemoryGuard-Windows.zip
+            ZemoryParent-Windows.zip
 
   release:
     needs: [build, windows]
@@ -173,9 +192,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest -R "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
-          gh release create latest -R "$GITHUB_REPOSITORY" dist/FamilyGuard-Child.apk dist/FamilyGuard-Parent.apk dist/ZemoryGuard-Windows.zip \
+          gh release create latest -R "$GITHUB_REPOSITORY" dist/FamilyGuard-Child.apk dist/FamilyGuard-Parent.apk dist/ZemoryGuard-Windows.zip dist/ZemoryParent-Windows.zip \
             --title "Zemory Family Guard — آخر إصدار (build ${GITHUB_RUN_NUMBER})" \
-            --notes "FamilyGuard-Child.apk: أجهزة الأطفال (هاتف/تابلت/تلفاز). FamilyGuard-Parent.apk: تطبيق المالك. ZemoryGuard-Windows.zip: كمبيوتر ويندوز (فك الضغط وشغّل install.bat كمسؤول)." \
+            --notes "FamilyGuard-Child.apk: أجهزة الأطفال (هاتف/تابلت/تلفاز). FamilyGuard-Parent.apk: تطبيق المالك. ZemoryGuard-Windows.zip: كمبيوتر ويندوز (فك الضغط وشغّل install.bat كمسؤول). ZemoryParent-Windows.zip: تطبيق الوالد لويندوز (فك الضغط وشغّل ZemoryParent.exe)." \
             --target "$GITHUB_SHA" --latest
 
       - name: Publish versioned release
@@ -183,7 +202,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" dist/FamilyGuard-Child.apk dist/FamilyGuard-Parent.apk dist/ZemoryGuard-Windows.zip \
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" dist/FamilyGuard-Child.apk dist/FamilyGuard-Parent.apk dist/ZemoryGuard-Windows.zip dist/ZemoryParent-Windows.zip \
             --title "$GITHUB_REF_NAME" --generate-notes
 
   deploy:

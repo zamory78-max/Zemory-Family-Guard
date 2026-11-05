@@ -150,7 +150,7 @@ onAuthStateChanged(auth, (u) => {
   stopDetail();
   if (S.unsubDevices) { S.unsubDevices(); S.unsubDevices = null; }
   if (!u) { renderAuth(); return; }
-  $user.innerHTML = `<span>${esc(u.email)}</span>${window.ZemoryApp ? `<button class="btn sm ghost" id="appLock" title="قفل التطبيق">🔒</button>` : ""}<button class="btn sm ghost" id="logout">خروج</button>`;
+  $user.innerHTML = `<span>${esc(u.email)}</span>${window.ZemoryApp && window.ZemoryApp.openSecurity ? `<button class="btn sm ghost" id="appLock" title="قفل التطبيق">🔒</button>` : ""}<button class="btn sm ghost" id="logout">خروج</button>`;
   document.getElementById("logout").onclick = () => signOut(auth);
   const lockBtn = document.getElementById("appLock");
   if (lockBtn) lockBtn.onclick = () => window.ZemoryApp.openSecurity();
@@ -160,7 +160,7 @@ onAuthStateChanged(auth, (u) => {
       S.devices = new Map();
       qs.forEach((d) => { const v = d.data(); if (!v.unlinked) S.devices.set(d.id, { id: d.id, ...v }); });
       if (S.deviceId && !S.devices.has(S.deviceId)) { stopDetail(); S.deviceId = null; }
-      if (BG) watchRequests();
+      if (BG || window.ZemoryDesktop) watchRequests();
       render();
     },
     (e) => { console.error(e); toast("تعذّر قراءة الأجهزة: " + e.code); },
