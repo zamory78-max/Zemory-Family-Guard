@@ -134,7 +134,11 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   margin: 12px 0;
   scrollbar-width: none;
+  position: sticky; top: var(--tb, 56px); z-index: 9;
+  box-shadow: 0 2px 6px rgba(0,0,0,.06);
 }
+.day-sep { padding: 10px 0 4px; margin-top: 6px; border-top: 1px solid var(--border); font-size: 13px; color: var(--primary); }
+.list > .day-sep:first-child { border-top: 0; margin-top: 0; }
 .tab {
   border: 0; background: transparent; padding: 8px 14px; border-radius: 9px; cursor: pointer; white-space: nowrap;
   color: var(--muted);

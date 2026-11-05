@@ -497,6 +497,8 @@ function renderDevice() {
   document.getElementById("back").onclick = () => { stopDetail(); S.deviceId = null; renderDevices(); };
   document.getElementById("delTop").onclick = () => confirmDeleteDevice(d.id);
   $app.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; renderDevice(); }));
+  const tbEl = document.querySelector(".topbar");
+  if (tbEl) document.documentElement.style.setProperty("--tb", tbEl.offsetHeight + "px");
   const body = document.getElementById("tabBody");
   ({ apps: tabApps, time: tabTime, screen: tabScreen, web: tabWeb, requests: tabRequests, reports: tabReports, rules: tabRules, commands: tabCommands }[S.tab])(body);
 
@@ -954,11 +956,23 @@ function tabReports(el) {
     <div class="card stack">
       <h2>سجل الأحداث</h2>
       <p class="small muted" style="margin:0">آخر ما حدث على الجهاز: المنع، السماح، تعطّل الحماية، الوضع الآمن، التشغيل.</p>
-      ${evs.length ? `<div class="list">${evs.slice(0, 120).map((e) => {
+      ${evs.length ? `<div class="list">${(() => { let lastDay = ""; return evs.slice(0, 120).map((e) => {
         const [ic, def] = EV[e.type] || ["•", e.type];
         const extra = e.type === "tamper" ? (e.detail === "off" ? " — توقّفت" : " — عادت") : (e.type === "unlock" ? " (" + esc(e.detail || "") + ")" : "");
-        return `<div class="item"><div class="row"><span>${ic}</span><b style="margin:0 6px">${esc(def)}</b><span class="muted small">${esc(e.label || "")}${extra}</span><span class="spacer"></span><span class="muted small">${e.t ? esc(fmtTime.format(new Date(e.t))) : ""}</span></div></div>`;
-      }).join("")}</div>` : `<div class="empty">لا توجد أحداث بعد</div>`}
+        let head = "";
+        if (e.t) {
+          const dd = new Date(e.t);
+          const k = dd.getFullYear() + "-" + dd.getMonth() + "-" + dd.getDate();
+          if (k !== lastDay) {
+            lastDay = k;
+            const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+            const diff = Math.round((t0 - new Date(dd.getFullYear(), dd.getMonth(), dd.getDate())) / 86400000);
+            const name = diff === 0 ? "اليوم" : diff === 1 ? "أمس" : "";
+            head = `<div class="day-sep"><b>${name || esc(fmtDate.format(dd))}</b>${name ? `<span class="muted small"> · ${esc(fmtDate.format(dd))}</span>` : ""}</div>`;
+          }
+        }
+        return head + `<div class="item"><div class="row"><span>${ic}</span><b style="margin:0 6px">${esc(def)}</b><span class="muted small">${esc(e.label || "")}${extra}</span><span class="spacer"></span><span class="muted small">${e.t ? esc(fmtTime.format(new Date(e.t))) : ""}</span></div></div>`;
+      }).join(""); })()}</div>` : `<div class="empty">لا توجد أحداث بعد</div>`}
     </div>
     ${actCard}
   </div>`;
