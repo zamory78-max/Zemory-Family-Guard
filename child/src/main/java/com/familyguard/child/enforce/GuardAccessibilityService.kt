@@ -187,8 +187,11 @@ class GuardAccessibilityService : AccessibilityService() {
         /** True only while Android really has this service bound (the setting string alone proves nothing). */
         @Volatile var connected = false
         const val YT_SETTINGS = "youtube-settings"
-        private val POWER_OFF_LABELS = listOf("Power off", "إيقاف التشغيل", "Éteindre", "Apagar")
-        private val POWER_RESTART_LABELS = listOf("Restart", "إعادة التشغيل", "Redémarrer", "Reiniciar")
+        private val POWER_OFF_LABELS = listOf("Power off", "إيقاف التشغيل", "ايقاف التشغيل", "إيقاف", "Éteindre", "Apagar")
+        private val POWER_RESTART_LABELS = listOf(
+            "Restart", "إعادة تشغيل", "إعادة التشغيل", "اعادة تشغيل", "Redémarrer", "Reiniciar",
+            "Emergency call", "مكالمة طوارئ", "Medical info", "معلومات طبية",
+        )
         val YOUTUBE_PKGS = setOf(
             "com.google.android.youtube", "com.google.android.apps.youtube.kids", "com.google.android.youtube.tv",
         )
