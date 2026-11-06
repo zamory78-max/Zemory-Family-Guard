@@ -26,6 +26,16 @@ internal sealed class MainForm : Form
     private readonly ToolStripMenuItem autoStart = new("تشغيل مع ويندوز");
     private bool reallyExit;
 
+    // ---- entry password lock ----
+    private readonly Panel lockPanel = new() { Dock = DockStyle.Fill, Visible = false, BackColor = Color.FromArgb(244, 246, 245) };
+    private readonly TextBox pwBox = new() { UseSystemPasswordChar = true, Width = 280, RightToLeft = RightToLeft.Yes, Font = new Font("Segoe UI", 12f) };
+    private readonly Label lockMsg = new() { AutoSize = false, Width = 280, Height = 24, ForeColor = Color.Firebrick, TextAlign = ContentAlignment.MiddleCenter, RightToLeft = RightToLeft.Yes };
+    private readonly Panel lockBox = new() { Width = 320, Height = 230 };
+    private readonly System.Windows.Forms.Timer idleTimer = new() { Interval = 15_000 };
+    private bool locked;
+    private int fails;
+    private DateTime blockedUntil = DateTime.MinValue;
+
     public MainForm()
     {
         Text = "Zemory Family Guard";
@@ -34,9 +44,28 @@ internal sealed class MainForm : Form
         MinimumSize = new Size(420, 600);
         StartPosition = FormStartPosition.CenterScreen;
         Controls.Add(web);
+        BuildLockPanel();
+        Controls.Add(lockPanel);
 
         var menu = new ContextMenuStrip { RightToLeft = RightToLeft.Yes };
         menu.Items.Add("فتح", null, (_, _) => ShowWindow());
+        menu.Items.Add("🔒 قفل الآن", null, (_, _) => { if (LockStore.HasPassword) ApplyLock(); else SetPasswordFlow(); });
+        menu.Items.Add("كلمة مرور الدخول (تعيين / تغيير)…", null, (_, _) => SetPasswordFlow());
+        menu.Items.Add("إزالة كلمة المرور…", null, (_, _) => RemovePasswordFlow());
+        var idleMenu = new ToolStripMenuItem("القفل التلقائي عند عدم النشاط");
+        foreach (var m in new[] { 1, 5, 15, 30, 60 })
+        {
+            var mm = m;
+            var it = new ToolStripMenuItem(mm + " دقيقة") { CheckOnClick = false, Checked = LockStore.IdleMinutes == mm };
+            it.Click += (_, _) =>
+            {
+                LockStore.SetIdleMinutes(mm);
+                foreach (ToolStripMenuItem x in idleMenu.DropDownItems) x.Checked = ReferenceEquals(x, it);
+            };
+            idleMenu.DropDownItems.Add(it);
+        }
+        menu.Items.Add(idleMenu);
+        menu.Items.Add(new ToolStripSeparator());
         autoStart.CheckOnClick = true;
         autoStart.Checked = IsAutoStart();
         autoStart.Click += (_, _) => SetAutoStart(autoStart.Checked);
@@ -52,6 +81,106 @@ internal sealed class MainForm : Form
         tray.BalloonTipClicked += (_, _) => ShowWindow();
 
         Load += async (_, _) => await InitWebAsync();
+
+        // the window starts locked when a password exists; otherwise offer to create one (once)
+        if (LockStore.HasPassword) ApplyLock();
+        Shown += (_, _) =>
+        {
+            if (!LockStore.HasPassword && !LockStore.AlreadyAsked)
+            {
+                var pw = PasswordDialog.AskNew(this, "حماية الدخول",
+                    "يمكنك حماية تطبيق الوالد بكلمة مرور تُطلب عند كل فتح (وعند الخمول أو الإغلاق إلى شريط المهام).",
+                    "ليس الآن");
+                if (pw != null) LockStore.SetPassword(pw); else LockStore.MarkAsked();
+            }
+        };
+        idleTimer.Tick += (_, _) =>
+        {
+            if (!locked && LockStore.HasPassword && Visible && LockStore.IdleTime() >= TimeSpan.FromMinutes(LockStore.IdleMinutes))
+                ApplyLock();
+        };
+        idleTimer.Start();
+        Resize += (_, _) =>
+        {
+            if (WindowState == FormWindowState.Minimized && LockStore.HasPassword) ApplyLock();
+        };
+    }
+
+    private void BuildLockPanel()
+    {
+        var title = new Label { Text = "🔒 Zemory Family Guard", AutoSize = false, Width = 320, Height = 44, Top = 0, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Segoe UI", 15f, FontStyle.Bold) };
+        var sub = new Label { Text = "أدخل كلمة مرور الدخول", AutoSize = false, Width = 320, Height = 26, Top = 48, TextAlign = ContentAlignment.MiddleCenter, RightToLeft = RightToLeft.Yes };
+        pwBox.Left = 20; pwBox.Top = 88;
+        lockMsg.Left = 20; lockMsg.Top = 126;
+        var go = new Button { Text = "دخول", Width = 280, Height = 36, Left = 20, Top = 158, FlatStyle = FlatStyle.System };
+        go.Click += (_, _) => TryUnlock();
+        pwBox.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; TryUnlock(); } };
+        lockBox.Controls.AddRange(new Control[] { title, sub, pwBox, lockMsg, go });
+        lockPanel.Controls.Add(lockBox);
+        lockPanel.Resize += (_, _) => CenterLockBox();
+        CenterLockBox();
+    }
+
+    private void CenterLockBox()
+    {
+        lockBox.Left = Math.Max(0, (lockPanel.ClientSize.Width - lockBox.Width) / 2);
+        lockBox.Top = Math.Max(0, (lockPanel.ClientSize.Height - lockBox.Height) / 2 - 20);
+    }
+
+    private void ApplyLock()
+    {
+        locked = true;
+        web.Visible = false;
+        lockPanel.Visible = true;
+        lockPanel.BringToFront();
+        CenterLockBox();
+        pwBox.Clear();
+        lockMsg.Text = "";
+        if (Visible) pwBox.Focus();
+    }
+
+    private void TryUnlock()
+    {
+        var wait = blockedUntil - DateTime.Now;
+        if (wait > TimeSpan.Zero)
+        {
+            lockMsg.Text = $"محاولات كثيرة. انتظر {Math.Ceiling(wait.TotalSeconds)} ثانية.";
+            return;
+        }
+        if (LockStore.Verify(pwBox.Text))
+        {
+            fails = 0;
+            locked = false;
+            lockPanel.Visible = false;
+            web.Visible = true;
+            return;
+        }
+        fails++;
+        pwBox.SelectAll();
+        if (fails >= 5)
+        {
+            var secs = Math.Min(300, 15 * (1 << Math.Min(5, fails - 5)));
+            blockedUntil = DateTime.Now.AddSeconds(secs);
+            lockMsg.Text = $"محاولات كثيرة. انتظر {secs} ثانية.";
+        }
+        else lockMsg.Text = "كلمة المرور غير صحيحة.";
+    }
+
+    private void SetPasswordFlow()
+    {
+        if (LockStore.HasPassword && !PasswordDialog.Confirm(this, "تغيير كلمة المرور")) return;
+        var pw = PasswordDialog.AskNew(this, "كلمة مرور الدخول", "اكتب كلمة المرور الجديدة التي تُطلب لفتح التطبيق.", "إلغاء");
+        if (pw == null) return;
+        LockStore.SetPassword(pw);
+        tray.ShowBalloonTip(3000, "Zemory Family Guard", "تم حفظ كلمة مرور الدخول.", ToolTipIcon.Info);
+    }
+
+    private void RemovePasswordFlow()
+    {
+        if (!LockStore.HasPassword) return;
+        if (!PasswordDialog.Confirm(this, "إزالة كلمة المرور")) return;
+        LockStore.Remove();
+        tray.ShowBalloonTip(3000, "Zemory Family Guard", "أُزيلت كلمة مرور الدخول.", ToolTipIcon.Info);
     }
 
     public void ShowWindow()
@@ -60,6 +189,7 @@ internal sealed class MainForm : Form
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         Activate();
         BringToFront();
+        if (locked) pwBox.Focus();
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -68,6 +198,7 @@ internal sealed class MainForm : Form
         if (!reallyExit && e.CloseReason == CloseReason.UserClosing)
         {
             e.Cancel = true;
+            if (LockStore.HasPassword) ApplyLock();
             Hide();
             return;
         }

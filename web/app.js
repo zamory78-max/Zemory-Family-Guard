@@ -910,6 +910,77 @@ const EV = {
   activity: ["🧭", "نشاط داخل تطبيق"], block: ["⛔", "حظر تطبيق"], web: ["🚫", "موقع محظور"], unlock: ["🔓", "سماح برمز المالك"],
   tamper: ["⚠️", "تغيّر في الحماية"], safemode: ["🟠", "الوضع الآمن"], boot: ["🔄", "تشغيل الجهاز"], hold: ["🔒", "قفل الشاشة"], lockout: ["⛔", "محاولات رمز خاطئة كثيرة"],
 };
+// ----- reports helpers -----
+const REP_FILTERS = [["all", "الكل"], ["block", "حظر التطبيقات"], ["web", "المواقع"], ["unlock", "سماح المالك"], ["protect", "الحماية والتشغيل"]];
+const REP_GROUP = { block: ["block", "hold", "lockout"], web: ["web"], unlock: ["unlock"], protect: ["tamper", "safemode", "boot"] };
+const REP_DAYS = [["today", "اليوم"], ["yesterday", "أمس"], ["week", "7 أيام"], ["all", "الكل"]];
+function repRange(day) {
+  const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+  const d0 = t0.getTime(), D = 86400000;
+  if (day === "today") return [d0, Infinity];
+  if (day === "yesterday") return [d0 - D, d0];
+  if (day === "week") return [d0 - 6 * D, Infinity];
+  return [0, Infinity];
+}
+function repEvents(evs, rep) {
+  const [a, b] = repRange(rep.day);
+  const grp = REP_GROUP[rep.filter];
+  const q = (rep.q || "").trim().toLowerCase();
+  return evs.filter((e) => {
+    if (e.type === "activity") return false;
+    const t = e.t || Date.now();
+    if (t < a || t >= b) return false;
+    if (grp && !grp.includes(e.type)) return false;
+    if (q && !`${e.label || ""} ${e.detail || ""} ${(EV[e.type] || [])[1] || ""}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+function repTop(evs, type, n) {
+  const m = new Map();
+  for (const e of evs) if (e.type === type && e.label) m.set(e.label, (m.get(e.label) || 0) + 1);
+  return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
+}
+function repHours(evs) {
+  const h = new Array(24).fill(0);
+  for (const e of evs) h[new Date(e.t || Date.now()).getHours()]++;
+  return h;
+}
+function repListHtml(list) {
+  if (!list.length) return `<div class="empty">لا توجد أحداث تطابق الاختيار</div>`;
+  let lastDay = "";
+  return `<div class="list">${list.slice(0, 200).map((e) => {
+    const [ic, def] = EV[e.type] || ["•", e.type];
+    const extra = e.type === "tamper" ? (e.detail === "off" ? " — توقّفت" : " — عادت") : (e.type === "unlock" ? " (" + esc(e.detail || "") + ")" : "");
+    let head = "";
+    if (e.t) {
+      const dd = new Date(e.t);
+      const k = dd.getFullYear() + "-" + dd.getMonth() + "-" + dd.getDate();
+      if (k !== lastDay) {
+        lastDay = k;
+        const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+        const diff = Math.round((t0 - new Date(dd.getFullYear(), dd.getMonth(), dd.getDate())) / 86400000);
+        const name = diff === 0 ? "اليوم" : diff === 1 ? "أمس" : "";
+        head = `<div class="day-sep"><b>${name || esc(fmtDate.format(dd))}</b>${name ? `<span class="muted small"> · ${esc(fmtDate.format(dd))}</span>` : ""}</div>`;
+      }
+    }
+    return head + `<div class="item"><div class="row"><span>${ic}</span><b style="margin:0 6px">${esc(def)}</b><span class="muted small">${esc(e.label || "")}${extra}</span><span class="spacer"></span><span class="muted small">${e.t ? esc(fmtTime.format(new Date(e.t))) : ""}</span></div></div>`;
+  }).join("")}</div>`;
+}
+function repCsv(list) {
+  const q = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+  const rows = [["التاريخ", "الوقت", "النوع", "الاسم", "التفاصيل"].map(q).join(",")];
+  for (const e of list) {
+    const d = e.t ? new Date(e.t) : null;
+    rows.push([d ? d.toLocaleDateString("en-CA") : "", d ? d.toLocaleTimeString("en-GB") : "", (EV[e.type] || [])[1] || e.type, e.label, e.detail].map(q).join(","));
+  }
+  const blob = new Blob(["﻿" + rows.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "zemory-events-" + new Date().toLocaleDateString("en-CA") + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
 function tabReports(el) {
   const d = dev();
   const usage = usageIsToday() ? appList().filter((a) => a.usage > 0).sort((a, b) => b.usage - a.usage) : [];
@@ -941,41 +1012,78 @@ function tabReports(el) {
       <p class="small muted" style="margin:0">يعمل على أندرويد فقط، ويصل السجل بعد عدة دقائق. الدقة تتفاوت حسب إصدار التطبيق.</p>
     </div>`;
 
+  const rep = (S.rep = S.rep || { day: "today", filter: "all", q: "" });
+  const inRange = repEvents(evs, { day: rep.day, filter: "all", q: "" });
+  const cnt = (types) => inRange.filter((e) => types.includes(e.type)).length;
+  const blockN = cnt(["block"]);
+  const webN = cnt(["web"]);
+  const unlockN = cnt(["unlock"]);
+  const protectN = inRange.filter((e) => e.type === "safemode" || (e.type === "tamper" && e.detail === "off")).length;
+  const topApps = repTop(inRange, "block", 6);
+  const topSites = repTop(inRange, "web", 6);
+  const hours = repHours(inRange);
+  const hMax = Math.max(1, ...hours);
+  const peak = hours.indexOf(Math.max(...hours));
+  const maxUse = usage.length ? usage[0].usage : 1;
+  const topRows = (list, empty) => list.length
+    ? list.map(([n, c]) => `<div class="bar-row"><span class="ell">${esc(n)}</span><div class="bar"><i style="width:${Math.max(6, Math.round((c / list[0][1]) * 100))}%"></i></div><span class="usage">${c}</span></div>`).join("")
+    : `<div class="empty small">${empty}</div>`;
+  const kpi = (ic, n, label, tone) => `<div class="kpi ${tone || ""}"><span class="ic">${ic}</span><b>${n}</b><span class="small muted">${label}</span></div>`;
+
   el.innerHTML = `
+  <div class="card rep-bar no-print">
+    <div class="seg" id="repDays">${REP_DAYS.map(([k, l]) => `<button class="${rep.day === k ? "sel" : ""}" data-day="${k}">${l}</button>`).join("")}</div>
+    <span class="spacer"></span>
+    <button class="btn" id="repCsv">⬇️ تصدير CSV</button>
+    <button class="btn" id="repPrint">🖨️ طباعة</button>
+  </div>
+  <div class="kpis">
+    ${kpi("⏱️", mins(total), "وقت الاستخدام اليوم")}
+    ${kpi("⛔", blockN, "حظر تطبيقات", blockN ? "warn" : "")}
+    ${kpi("🚫", webN, "مواقع محظورة", webN ? "warn" : "")}
+    ${kpi("🔓", unlockN, "سماح برمز المالك")}
+    ${kpi("🌐", doms.length, "مواقع زارها اليوم")}
+    ${kpi("⚠️", protectN, "أحداث الحماية", protectN ? "bad" : "")}
+  </div>
   <div class="cols">
     <div class="card stack">
-      <h2>ملخص اليوم</h2>
-      <div class="bar-row"><span>وقت الاستخدام الكلي</span><div></div><span class="usage">${mins(total)}</span></div>
-      <div class="bar-row"><span>مواقع مميّزة زارها</span><div></div><span class="usage">${doms.length}</span></div>
-      <div class="bar-row"><span>محاولات مواقع محظورة</span><div></div><span class="usage">${blockedHits.length}</span></div>
+      <h2>الاستخدام اليوم</h2>
       ${safeCount ? `<div class="notice" style="background:var(--warn-soft);color:var(--warn)">🟠 دخل الوضع الآمن ${safeCount} مرة — راجع السجل أدناه.</div>` : ""}
       ${tamperCount ? `<div class="notice">⚠️ تعطّلت صلاحيات حماية ${tamperCount} مرة.</div>` : ""}
-      <h3>أكثر التطبيقات استخداماً اليوم</h3>
-      ${usage.length ? usage.slice(0, 8).map((a) => `<div class="bar-row"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.label)}</span><div></div><span class="usage">${mins(a.usage)}</span></div>`).join("") : `<div class="empty">لا توجد بيانات بعد</div>`}
+      ${usage.length ? usage.slice(0, 10).map((a) => `<div class="bar-row"><span class="ell">${esc(a.label)}</span><div class="bar"><i style="width:${Math.max(4, Math.round((a.usage / maxUse) * 100))}%"></i></div><span class="usage">${mins(a.usage)}<span class="muted small"> · ${total ? Math.round((a.usage / total) * 100) : 0}%</span></span></div>`).join("") : `<div class="empty">لا توجد بيانات بعد</div>`}
     </div>
     <div class="card stack">
-      <h2>سجل الأحداث</h2>
-      <p class="small muted" style="margin:0">آخر ما حدث على الجهاز: المنع، السماح، تعطّل الحماية، الوضع الآمن، التشغيل.</p>
-      ${evs.length ? `<div class="list">${(() => { let lastDay = ""; return evs.slice(0, 120).map((e) => {
-        const [ic, def] = EV[e.type] || ["•", e.type];
-        const extra = e.type === "tamper" ? (e.detail === "off" ? " — توقّفت" : " — عادت") : (e.type === "unlock" ? " (" + esc(e.detail || "") + ")" : "");
-        let head = "";
-        if (e.t) {
-          const dd = new Date(e.t);
-          const k = dd.getFullYear() + "-" + dd.getMonth() + "-" + dd.getDate();
-          if (k !== lastDay) {
-            lastDay = k;
-            const t0 = new Date(); t0.setHours(0, 0, 0, 0);
-            const diff = Math.round((t0 - new Date(dd.getFullYear(), dd.getMonth(), dd.getDate())) / 86400000);
-            const name = diff === 0 ? "اليوم" : diff === 1 ? "أمس" : "";
-            head = `<div class="day-sep"><b>${name || esc(fmtDate.format(dd))}</b>${name ? `<span class="muted small"> · ${esc(fmtDate.format(dd))}</span>` : ""}</div>`;
-          }
-        }
-        return head + `<div class="item"><div class="row"><span>${ic}</span><b style="margin:0 6px">${esc(def)}</b><span class="muted small">${esc(e.label || "")}${extra}</span><span class="spacer"></span><span class="muted small">${e.t ? esc(fmtTime.format(new Date(e.t))) : ""}</span></div></div>`;
-      }).join(""); })()}</div>` : `<div class="empty">لا توجد أحداث بعد</div>`}
+      <h2>توزيع الأحداث على ساعات اليوم</h2>
+      <div class="hours" dir="ltr">${hours.map((n, h) => `<div class="hcol" title="${h}:00 — ${n}"><i style="height:${Math.round((n / hMax) * 100)}%"></i><span>${h % 6 === 0 ? h : ""}</span></div>`).join("")}</div>
+      <p class="small muted" style="margin:0">${inRange.length ? `أكثر ساعة نشاطاً: ${peak}:00 (${hours[peak]} حدث)` : "لا توجد أحداث في هذه الفترة"}</p>
+      <h3>أكثر التطبيقات المحظورة محاولةً</h3>
+      ${topRows(topApps, "لا توجد محاولات")}
+      <h3>أكثر المواقع المحظورة محاولةً</h3>
+      ${topRows(topSites, "لا توجد محاولات")}
     </div>
-    ${actCard}
-  </div>`;
+  </div>
+  <div class="card stack" style="margin-top:12px">
+    <h2>سجل الأحداث</h2>
+    <p class="small muted" style="margin:0">آخر ما حدث على الجهاز: المنع، السماح، تعطّل الحماية، الوضع الآمن، التشغيل. (يُعرض آخر 300 حدث.)</p>
+    <div class="seg no-print" id="repFilters">${REP_FILTERS.map(([k, l]) => `<button class="${rep.filter === k ? "sel" : ""}" data-f="${k}">${l}</button>`).join("")}</div>
+    <input class="input no-print" id="repQ" type="search" placeholder="بحث في السجل (اسم تطبيق أو موقع…)" value="${esc(rep.q)}">
+    <div id="evList"></div>
+  </div>
+  ${actCard}
+`;
+  const evList = () => repEvents(evs, rep);
+  const paint = () => { const l = evList(); document.getElementById("evList").innerHTML = repListHtml(l); };
+  paint();
+  document.getElementById("repDays").onclick = (ev) => { const b = ev.target.closest("[data-day]"); if (b) { rep.day = b.dataset.day; renderDevice(); } };
+  document.getElementById("repFilters").onclick = (ev) => {
+    const b = ev.target.closest("[data-f]"); if (!b) return;
+    rep.filter = b.dataset.f;
+    document.querySelectorAll("#repFilters button").forEach((x) => x.classList.toggle("sel", x === b));
+    paint();
+  };
+  document.getElementById("repQ").oninput = (ev) => { rep.q = ev.target.value; paint(); };
+  document.getElementById("repCsv").onclick = () => repCsv(evList());
+  document.getElementById("repPrint").onclick = () => window.print();
   const aOn = document.getElementById("actOn");
   if (aOn) {
     const save = (next) => run(updateDoc(devRef(), { "policy.activity": next }), "تم الحفظ");

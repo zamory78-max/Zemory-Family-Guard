@@ -211,3 +211,28 @@ a.mono:hover { color: var(--primary); text-decoration: underline; }
 .domain-row a.mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 .fav { width: 18px; height: 18px; border-radius: 4px; flex-shrink: 0; object-fit: contain; background: var(--surface-2); }
 .chip .fav { width: 16px; height: 16px; }
+
+/* reports */
+.rep-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px 12px; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 4px; background: var(--surface-2); padding: 3px; border-radius: 10px; }
+.seg button { border: 0; background: transparent; padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--muted); }
+.seg button.sel { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
+.kpis { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); margin-bottom: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 2px; box-shadow: var(--shadow); }
+.kpi b { font-size: 24px; line-height: 1.2; }
+.kpi .ic { font-size: 18px; }
+.kpi.warn b { color: var(--warn); }
+.kpi.bad b { color: var(--danger); }
+.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar { height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--primary); border-radius: 999px; }
+.hours { display: flex; align-items: flex-end; gap: 3px; height: 110px; padding-top: 6px; }
+.hcol { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 2px; font-size: 10px; color: var(--muted); }
+.hcol i { display: block; width: 100%; min-height: 2px; background: var(--primary); border-radius: 3px 3px 0 0; opacity: .85; }
+.hcol span { height: 12px; }
+@media (min-width: 1100px) { .container { max-width: 1280px; } }
+@media print {
+  .topbar, .tabs, .no-print, .devhead button { display: none !important; }
+  body { background: #fff; }
+  .card, .kpi { box-shadow: none; break-inside: avoid; }
+}
