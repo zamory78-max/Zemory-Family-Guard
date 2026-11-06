@@ -1116,13 +1116,14 @@ function tabWeb(el) {
 
 // ----- tab: rules -----
 // Rules that also work in "normal protection" (enforced with the owner PIN); the rest need Device Owner
-const RULES_NORMAL = new Set(["lock_settings", "lock_youtube_settings", "no_install_apps", "no_uninstall_apps", "no_install_unknown_sources"]);
+const RULES_NORMAL = new Set(["lock_power_menu", "lock_settings", "lock_youtube_settings", "no_install_apps", "no_uninstall_apps", "no_install_unknown_sources"]);
 const RULES = [
   ["no_install_apps", "منع تثبيت التطبيقات", "يمنع التثبيت من المتجر (Play Store) ومن الملفات. في الحماية العادية: يُقفل المتجر برمز المالك."],
   ["no_uninstall_apps", "منع حذف التطبيقات", "في الحماية العادية: تُقفل شاشة الحذف برمز المالك."],
   ["no_install_unknown_sources", "منع التثبيت من مصادر غير معروفة", "ملفات APK من خارج المتجر (واتساب، المتصفح…). لا يمنع Play Store."],
   ["no_control_apps", "منع إيقاف التطبيقات أو مسح بياناتها", "يحمي تطبيق المراقبة من الإيقاف."],
   ["lock_settings", "قفل تطبيق الإعدادات برمز المالك", "يحتاج خدمة إمكانية الوصول."],
+  ["lock_power_menu", "قفل قائمة الطاقة (يمنع الوضع الآمن)", "يغلق قائمة الإيقاف وإعادة التشغيل فور ظهورها، فلا يصل الطفل إلى الوضع الآمن منها. يحتاج خدمة إمكانية الوصول. لا يمنع الدخول بأزرار الجهاز أثناء الإقلاع."],
   ["lock_youtube_settings", "قفل إعدادات يوتيوب وسجلّه برمز المالك", "يقفل إعدادات يوتيوب وصفحة سجل المشاهدة (حذف/إيقاف السجل) في التطبيق، وصفحات myactivity.google.com و youtube.com/feed/history في المتصفح. يعمل على YouTube و YouTube Kids."],
   ["no_config_date_time", "منع تغيير التاريخ والوقت", "يمنع التحايل على الحدود اليومية."],
   ["no_factory_reset", "منع إعادة ضبط المصنع", ""],

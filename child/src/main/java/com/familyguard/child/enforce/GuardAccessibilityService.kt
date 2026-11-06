@@ -23,6 +23,7 @@ class GuardAccessibilityService : AccessibilityService() {
         val e = event ?: return
         val pkg = e.packageName?.toString() ?: return
         if (pkg in YOUTUBE_PKGS) checkYoutubeSettings(e)
+        if (pkg == "com.android.systemui" || pkg == "android") checkPowerMenu()
         if (e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || e.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             runCatching { ActivityWatcher.onEvent(this, pkg) { appLabel(pkg) } }
         }
@@ -112,6 +113,32 @@ class GuardAccessibilityService : AccessibilityService() {
         }
     }
 
+    private var lastPowerCheck = 0L
+
+    /**
+     * "Lock the power menu": closes the power-off / restart dialog (it is the way to Safe Mode) as soon as it opens.
+     * Recognised by showing a "power off" and a "restart" entry together, so the quick panel is left alone.
+     */
+    private fun checkPowerMenu() {
+        if (Guard.policy.restrictions["lock_power_menu"] != true) return
+        if (Guard.isPaused(this)) return
+        val now = System.currentTimeMillis()
+        if (now - lastPowerCheck < 400) return
+        lastPowerCheck = now
+        val root = try {
+            rootInActiveWindow
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val off = POWER_OFF_LABELS.any { root.findAccessibilityNodeInfosByText(it)?.isNotEmpty() == true }
+        if (!off) return
+        val restart = POWER_RESTART_LABELS.any { root.findAccessibilityNodeInfosByText(it)?.isNotEmpty() == true }
+        if (!restart) return
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        Events.log("block", "قائمة الطاقة", "power")
+    }
+
     private var lastYtCheck = 0L
 
     /** Locks YouTube's settings / history screens with the owner PIN (so watch history can't be cleared or paused). */
@@ -160,6 +187,8 @@ class GuardAccessibilityService : AccessibilityService() {
         /** True only while Android really has this service bound (the setting string alone proves nothing). */
         @Volatile var connected = false
         const val YT_SETTINGS = "youtube-settings"
+        private val POWER_OFF_LABELS = listOf("Power off", "إيقاف التشغيل", "Éteindre", "Apagar")
+        private val POWER_RESTART_LABELS = listOf("Restart", "إعادة التشغيل", "Redémarrer", "Reiniciar")
         val YOUTUBE_PKGS = setOf(
             "com.google.android.youtube", "com.google.android.apps.youtube.kids", "com.google.android.youtube.tv",
         )
