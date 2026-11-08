@@ -220,6 +220,7 @@ class GuardService : Service() {
         scope.launch {
             while (isActive) {
                 runCatching { UsageWatcher.tick(ctx) }.onFailure { Log.w(TAG, "usagewatch", it) }
+                runCatching { MediaWatcher.enforce() }
                 delay(1_500L)
             }
         }

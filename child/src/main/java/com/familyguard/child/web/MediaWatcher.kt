@@ -26,6 +26,8 @@ object MediaWatcher {
     private const val TAG = "FG-Media"
     private var started = false
     private val callbacks = HashMap<Any, MediaController.Callback>()
+    private val controllers = HashMap<Any, MediaController>()
+    private var appCtx: Context? = null
     private val recent = HashMap<String, Long>()
 
     fun isEnabled(ctx: Context): Boolean =
@@ -44,6 +46,7 @@ object MediaWatcher {
     fun start(ctx: Context) {
         if (started || !isEnabled(ctx)) return
         val app = ctx.applicationContext
+        appCtx = app
         try {
             val msm = app.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
             val comp = ComponentName(app, MediaListener::class.java)
@@ -70,8 +73,12 @@ object MediaWatcher {
             if (callbacks.containsKey(token)) continue
             val cb = object : MediaController.Callback() {
                 override fun onMetadataChanged(metadata: MediaMetadata?) = record(c.packageName, metadata, c.playbackState)
-                override fun onPlaybackStateChanged(state: PlaybackState?) = record(c.packageName, c.metadata, state)
+                override fun onPlaybackStateChanged(state: PlaybackState?) {
+                    record(c.packageName, c.metadata, state)
+                    enforce()
+                }
             }
+            controllers[token] = c
             try {
                 c.registerCallback(cb, Handler(Looper.getMainLooper()))
                 callbacks[token] = cb
@@ -79,6 +86,26 @@ object MediaWatcher {
                 Log.w(TAG, "register", e)
             }
             record(c.packageName, c.metadata, c.playbackState)
+        }
+    }
+
+    /** An app that is blocked (or over its limit) must not keep playing sound or video in the background / PiP. */
+    fun enforce() {
+        val ctx = appCtx ?: return
+        for (c in controllers.values.toList()) {
+            try {
+                if (c.playbackState?.state != PlaybackState.STATE_PLAYING) continue
+                val pkg = c.packageName ?: continue
+                if (pkg == ctx.packageName) continue
+                val reason = com.familyguard.child.enforce.Enforcer.blockReason(ctx, pkg) ?: continue
+                c.transportControls.pause()
+                val label = runCatching {
+                    ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(pkg, 0)).toString()
+                }.getOrDefault(pkg)
+                com.familyguard.child.sync.Events.log("block", label, reason)
+            } catch (e: Exception) {
+                Log.w(TAG, "enforce", e)
+            }
         }
     }
 

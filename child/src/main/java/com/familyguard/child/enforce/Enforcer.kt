@@ -125,6 +125,9 @@ object Enforcer {
         val p = Guard.policy
         if (pkg in p.blocked) return "blocked"
         if (p.allowOnly && isUnsupportedBrowser(ctx, pkg)) return "browser"
+        // A website "installed" from Chrome runs as its own app (WebAPK): the address bar is not visible, so the
+        // site filter cannot see it. Treat it as a browser we cannot read.
+        if ((p.allowOnly || p.webFilter) && pkg.startsWith("org.chromium.webapk.")) return "browser"
         val lim = p.limits[pkg] ?: 0
         if (lim > 0 && (Guard.usageToday[pkg] ?: 0) >= lim) return "limit"
         val down = downAllowed(p)
@@ -145,12 +148,22 @@ object Enforcer {
         "com.samsung.android.packageinstaller", "com.miui.packageinstaller",
     )
 
+    /**
+     * Samsung screens that can undo the protection or hide apps from it: Device Care (puts apps to sleep / kills
+     * them) and Secure Folder (runs copies of apps in another user that the accessibility service cannot see).
+     */
+    val BYPASS_PKGS = setOf(
+        "com.samsung.android.lool", "com.samsung.android.sm", "com.samsung.android.sm_cn",
+        "com.samsung.knox.securefolder", "com.samsung.android.knox.containercore",
+        "com.sec.android.app.shealth.dummy",
+    )
+
     fun isPinLocked(ctx: Context, pkg: String): Boolean {
         val p = Guard.policy
         if (p.pinHash.isEmpty()) return false
         if (pkg in p.pinLocked) return true
         val r = p.restrictions
-        if (r["lock_settings"] == true && pkg in SETTINGS_PKGS) return true
+        if (r["lock_settings"] == true && (pkg in SETTINGS_PKGS || pkg in BYPASS_PKGS)) return true
         // Without Device Owner, Android ignores install restrictions: enforce them with the owner PIN instead.
         if (!Dpm.isOwner(ctx)) {
             if (r["no_install_apps"] == true && (pkg in STORE_PKGS || pkg in INSTALLER_PKGS)) return true
