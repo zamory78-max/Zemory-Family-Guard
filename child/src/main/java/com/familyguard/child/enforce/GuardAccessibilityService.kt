@@ -21,6 +21,7 @@ class GuardAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val e = event ?: return
+        checkAllWindows() // TYPE_WINDOWS_CHANGED events carry no package, so look before the package check
         val pkg = e.packageName?.toString() ?: return
         if (pkg in YOUTUBE_PKGS) checkYoutubeSettings(e)
         if (pkg == "com.android.systemui" || pkg == "android") checkPowerMenu()
@@ -110,6 +111,35 @@ class GuardAccessibilityService : AccessibilityService() {
                 LockActivity.show(this, if (pageBlocked) text else host, "web", url = text)
             }
             return
+        }
+    }
+
+    private var lastWinCheck = 0L
+
+    /**
+     * Split-screen / pop-up / freeform: a blocked app can stay visible next to our lock screen. Look at every
+     * application window, and if one of them is blocked, leave multi-window mode (Home) and show the lock.
+     */
+    private fun checkAllWindows() {
+        val now = System.currentTimeMillis()
+        if (now - lastWinCheck < 700) return
+        lastWinCheck = now
+        val wins = try { windows } catch (_: Exception) { null } ?: return
+        val apps = wins.filter { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }
+        if (apps.size < 2) return
+        for (w in apps) {
+            val p = runCatching { w.root?.packageName?.toString() }.getOrNull() ?: continue
+            if (p == packageName || p == "com.android.systemui" || p == "android") continue
+            val ime = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+            if (ime != null && ime.startsWith("$p/")) continue
+            val reason = Enforcer.blockReason(this, p)
+            val pin = !Guard.isPaused(this) && Enforcer.isPinLocked(this, p) && !Guard.isUnlocked(p)
+            if (reason != null || pin || Guard.isHoldActive()) {
+                Events.log("block", appLabel(p), reason ?: "pin")
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                LockActivity.show(this, p, reason ?: "pin")
+                return
+            }
         }
     }
 

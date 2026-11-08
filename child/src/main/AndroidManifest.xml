@@ -49,6 +49,8 @@
 
         <activity
             android:name=".ui.LockActivity"
+            android:resizeableActivity="false"
+            android:supportsPictureInPicture="false"
             android:excludeFromRecents="true"
             android:exported="false"
             android:launchMode="singleTask"
