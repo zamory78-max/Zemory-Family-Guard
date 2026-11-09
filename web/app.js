@@ -314,9 +314,18 @@ function deviceIssues(d) {
   if (st.battery === false && d.type !== "tv") out.push(["قد يوقفه توفير البطارية", "warn"]);
   if (!(d.policy && d.policy.pinHash)) out.push(["لم يُعيَّن رمز المالك", "warn"]);
   if (st.paused) out.push(["متوقف مؤقتاً", "warn"]);
+  if (typeof st.batteryLevel === "number" && !st.charging && st.batteryLevel <= 15) out.push([`البطارية منخفضة ${st.batteryLevel}%`, "warn"]);
   return out;
 }
 const deviceWarnings = (d) => deviceIssues(d).map(([t]) => t);
+// Battery chip: "🔋 60%" / "⚡ 60%" while charging; red at 15% or less
+function batteryBadge(d) {
+  const st = d.status || {};
+  if (typeof st.batteryLevel !== "number") return "";
+  const lvl = st.batteryLevel;
+  const cls = !st.charging && lvl <= 15 ? "danger" : !st.charging && lvl <= 30 ? "warn" : "ok";
+  return `<span class="badge ${cls}" title="مستوى البطارية">${st.charging ? "⚡" : "🔋"} ${lvl}%</span>`;
+}
 const issueBadges = (d) => deviceIssues(d).map(([t, c]) => `<span class="badge ${c}">${esc(t)}</span>`).join("");
 const modeBadge = (d) => isPc(d) ? `<span class="badge ok">خدمة ويندوز</span>` : (d.status && d.status.deviceOwner)
   ? `<span class="badge ok">حماية كاملة</span>` : `<span class="badge">حماية عادية</span>`;
@@ -336,7 +345,7 @@ function renderDevices() {
           <button class="btn sm ghost" data-del="${esc(d.id)}" title="حذف الجهاز">🗑</button></div>
         <b>${esc(d.name || "جهاز")}</b>
         <span class="muted small">${esc(d.model || "")} · ${esc(ago(tsMs(d.lastSeen)))}</span>
-        <div class="row">${modeBadge(d)}${issueBadges(d)}</div>
+        <div class="row">${batteryBadge(d)}${modeBadge(d)}${issueBadges(d)}</div>
       </div>`;
     }).join("")}
     <div class="card device-card add" id="addDevice"><span style="font-size:28px">＋</span><span>إضافة جهاز</span></div>
@@ -491,7 +500,7 @@ function renderDevice() {
   <div class="row" style="margin-top:12px"><h1 style="margin:0">${typeIcon(d.type)} ${esc(d.name || "جهاز")}</h1><span class="spacer"></span>
     <button class="btn sm danger" id="delTop">🗑 حذف الجهاز</button></div>
   <div class="row small muted">${esc(d.model || "")} · ${isPc(d) ? "Windows build" : "Android SDK"} ${esc(d.sdk ?? "?")} · التطبيق ${esc(d.appVersion || "?")}</div>
-  <div class="row" style="margin-top:8px">${modeBadge(d)}${issueBadges(d)}</div>
+  <div class="row" style="margin-top:8px">${batteryBadge(d)}${modeBadge(d)}${issueBadges(d)}</div>
   <nav class="tabs">${TABS.map(([k, t]) => `<button class="tab ${S.tab === k ? "active" : ""}" data-tab="${k}">${t}${k === "requests" && S.requests.length ? ` <span class="count">${S.requests.length}</span>` : ""}</button>`).join("")}</nav>
   <section id="tabBody"></section>`;
   document.getElementById("back").onclick = () => { stopDetail(); S.deviceId = null; renderDevices(); };

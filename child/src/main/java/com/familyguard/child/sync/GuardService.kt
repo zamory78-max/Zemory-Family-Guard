@@ -301,7 +301,22 @@ class GuardService : Service() {
             ctx.stopService(Intent(ctx, GuardService::class.java))
         }
 
-        fun statusMap(ctx: Context): Map<String, Any> = mapOf(
+        /** Battery level rounded to 5% (so a 1% change does not trigger an upload) + charging flag. */
+        private fun batteryInfo(ctx: Context): Map<String, Any> {
+            val i = runCatching {
+                ctx.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            }.getOrNull() ?: return emptyMap()
+            val level = i.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+            val scale = i.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100)
+            if (level < 0 || scale <= 0) return emptyMap()
+            val pct = ((level * 100f / scale) / 5f).toInt() * 5
+            val st = i.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+            val charging = st == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                st == android.os.BatteryManager.BATTERY_STATUS_FULL
+            return mapOf("batteryLevel" to pct, "charging" to charging)
+        }
+
+        fun statusMap(ctx: Context): Map<String, Any> = batteryInfo(ctx) + mapOf(
             "deviceOwner" to Dpm.isOwner(ctx),
             "accessibility" to Dpm.isAccessibilityOn(ctx),
             "usageAccess" to Dpm.hasUsageAccess(ctx),

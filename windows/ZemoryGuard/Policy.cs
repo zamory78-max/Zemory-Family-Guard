@@ -200,7 +200,36 @@ internal static class Domains
 
 internal static class Status
 {
-    public static Dictionary<string, object?> Collect(bool helperOk, bool paused = false) => new()
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct SYSTEM_POWER_STATUS
+    {
+        public byte ACLineStatus, BatteryFlag, BatteryLifePercent, SystemStatusFlag;
+        public int BatteryLifeTime, BatteryFullLifeTime;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS s);
+
+    /// <summary>Laptop battery (rounded to 5%). Desktops have no battery, so nothing is reported.</summary>
+    private static void AddBattery(Dictionary<string, object?> d)
+    {
+        try
+        {
+            if (!GetSystemPowerStatus(out var s) || s.BatteryLifePercent > 100 || (s.BatteryFlag & 128) != 0) return;
+            d["batteryLevel"] = s.BatteryLifePercent / 5 * 5;
+            d["charging"] = s.ACLineStatus == 1;
+        }
+        catch { }
+    }
+
+    public static Dictionary<string, object?> Collect(bool helperOk, bool paused = false)
+    {
+        var d = Base(helperOk, paused);
+        AddBattery(d);
+        return d;
+    }
+
+    private static Dictionary<string, object?> Base(bool helperOk, bool paused) => new()
     {
         ["platform"] = "windows",
         ["deviceOwner"] = true,       // the agent runs as a Windows service (full protection)
