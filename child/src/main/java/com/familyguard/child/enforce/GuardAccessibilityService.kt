@@ -1,6 +1,8 @@
 package com.familyguard.child.enforce
 
 import android.accessibilityservice.AccessibilityService
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import com.familyguard.child.Domains
@@ -153,19 +155,21 @@ class GuardAccessibilityService : AccessibilityService() {
         if (Guard.policy.restrictions["lock_power_menu"] != true) return
         if (Guard.isPaused(this)) return
         val now = System.currentTimeMillis()
-        if (now - lastPowerCheck < 400) return
+        if (now - lastPowerCheck < 120) return
         lastPowerCheck = now
-        val root = try {
-            rootInActiveWindow
-        } catch (_: Exception) {
-            null
-        } ?: return
-        val off = POWER_OFF_LABELS.any { root.findAccessibilityNodeInfosByText(it)?.isNotEmpty() == true }
-        if (!off) return
-        val restart = POWER_RESTART_LABELS.any { root.findAccessibilityNodeInfosByText(it)?.isNotEmpty() == true }
-        if (!restart) return
+        // The power menu is a separate system window and is not always the "active" one, so look at all of them.
+        val roots = ArrayList<android.view.accessibility.AccessibilityNodeInfo>()
+        runCatching { rootInActiveWindow }.getOrNull()?.let { roots.add(it) }
+        runCatching { windows }.getOrNull()?.forEach { w -> runCatching { w.root }.getOrNull()?.let { roots.add(it) } }
+        val hit = roots.any { root ->
+            POWER_OFF_LABELS.any { root.findAccessibilityNodeInfosByText(it)?.isNotEmpty() == true } &&
+                POWER_RESTART_LABELS.any { root.findAccessibilityNodeInfosByText(it)?.isNotEmpty() == true }
+        }
+        if (!hit) return
+        // Close it, and do it again right away in case the first attempt only dismissed an animation.
         performGlobalAction(GLOBAL_ACTION_BACK)
         performGlobalAction(GLOBAL_ACTION_HOME)
+        Handler(Looper.getMainLooper()).postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 150)
         Events.log("block", "قائمة الطاقة", "power")
     }
 
