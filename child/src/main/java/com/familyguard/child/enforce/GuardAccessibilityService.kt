@@ -20,11 +20,20 @@ class GuardAccessibilityService : AccessibilityService() {
     private var lastUrlCheck = 0L
     private var lastFgCheck = 0L
     private var lastUrl = ""
+    private var lastClickLabel = ""
+    private var lastClickAt = 0L
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val e = event ?: return
         checkAllWindows() // TYPE_WINDOWS_CHANGED events carry no package, so look before the package check
+        if (e.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) rememberClick(e)
         val pkg = e.packageName?.toString() ?: return
+        if (e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val cls = e.className?.toString().orEmpty()
+            if (cls.contains("ActionDisabledByAdmin", true) || cls.contains("SuspendedApp", true) ||
+                cls.contains("BlockedByAdmin", true) || cls.contains("DeviceAdminSupport", true)
+            ) handleSuspendedDialog()
+        }
         if (pkg in YOUTUBE_PKGS) checkYoutubeSettings(e)
         if (pkg == "com.android.systemui" || pkg == "android") checkPowerMenu()
         if (e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || e.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
@@ -53,6 +62,51 @@ class GuardAccessibilityService : AccessibilityService() {
                 }
             }
         }
+    }
+
+    /** Remember what icon was tapped (label or description) so a suspended app can be identified later. */
+    private fun rememberClick(e: AccessibilityEvent) {
+        val t = (e.text?.joinToString(" ").orEmpty() + " " + e.contentDescription.orEmpty()).trim()
+        if (t.isEmpty()) return
+        lastClickLabel = t.lowercase()
+        lastClickAt = System.currentTimeMillis()
+    }
+
+    /**
+     * With Device Owner, blocked apps are suspended by Android, which shows its own "action not allowed" message.
+     * Replace it with our request window so the child can ask for permission, as in normal protection.
+     */
+    private fun handleSuspendedDialog() {
+        if (Guard.isPaused(this)) return
+        val suspended = com.familyguard.child.Prefs(this).suspendedByUs
+        if (suspended.isEmpty()) return
+        val texts = StringBuilder()
+        runCatching {
+            val root = rootInActiveWindow
+            fun walk(n: android.view.accessibility.AccessibilityNodeInfo?, d: Int) {
+                if (n == null || d > 12) return
+                n.text?.let { texts.append(it).append(' ') }
+                n.contentDescription?.let { texts.append(it).append(' ') }
+                for (i in 0 until n.childCount) walk(n.getChild(i), d + 1)
+            }
+            walk(root, 0)
+        }
+        val dialogText = texts.toString().lowercase()
+        val recentClick = if (System.currentTimeMillis() - lastClickAt < 4_000L) lastClickLabel else ""
+        var target: String? = null
+        for (pkg in suspended) {
+            val label = appLabel(pkg).lowercase()
+            if (label.length < 2) continue
+            if (dialogText.contains(label) || (recentClick.isNotEmpty() && recentClick.contains(label))) {
+                target = pkg
+                break
+            }
+        }
+        val pkg = target ?: return
+        val reason = Enforcer.blockReason(this, pkg) ?: "blocked"
+        Events.log("block", appLabel(pkg), reason)
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        LockActivity.show(this, pkg, reason)
     }
 
     private fun appLabel(pkg: String): String = runCatching {
