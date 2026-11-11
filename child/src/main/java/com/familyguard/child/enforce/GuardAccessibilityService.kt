@@ -66,7 +66,7 @@ class GuardAccessibilityService : AccessibilityService() {
 
     /** Remember what icon was tapped (label or description) so a suspended app can be identified later. */
     private fun rememberClick(e: AccessibilityEvent) {
-        val t = (e.text?.joinToString(" ").orEmpty() + " " + e.contentDescription.orEmpty()).trim()
+        val t = (e.text?.joinToString(" ").orEmpty() + " " + (e.contentDescription?.toString() ?: "")).trim()
         if (t.isEmpty()) return
         lastClickLabel = t.lowercase()
         lastClickAt = System.currentTimeMillis()
