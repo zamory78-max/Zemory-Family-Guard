@@ -197,6 +197,17 @@ jobs:
             --notes "FamilyGuard-Child.apk: أجهزة الأطفال (هاتف/تابلت/تلفاز). FamilyGuard-Parent.apk: تطبيق المالك. ZemoryGuard-Windows.zip: كمبيوتر ويندوز (فك الضغط وشغّل install.bat كمسؤول). ZemoryParent-Windows.zip: تطبيق الوالد لويندوز (فك الضغط وشغّل ZemoryParent.exe)." \
             --target "$GITHUB_SHA" --latest
 
+      - name: نشر نسخة في مستودع التحميلات العام (apps-downloads)
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.DOWNLOADS_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::warning::DOWNLOADS_TOKEN غير مضبوط، تم تخطي النشر في apps-downloads"; exit 0; fi
+          gh release view guard -R zamory78-max/apps-downloads >/dev/null 2>&1 || \
+            gh release create guard -R zamory78-max/apps-downloads --title "Zemory Family Guard" --notes "آخر نسخة من Zemory Family Guard"
+          gh release upload guard dist/FamilyGuard-Parent.apk dist/FamilyGuard-Child.apk dist/ZemoryGuard-Windows.zip dist/ZemoryParent-Windows.zip -R zamory78-max/apps-downloads --clobber
+
       - name: Publish versioned release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
