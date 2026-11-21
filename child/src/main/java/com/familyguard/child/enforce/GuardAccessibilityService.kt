@@ -164,6 +164,9 @@ class GuardAccessibilityService : AccessibilityService() {
             return
         }
         if (!Guard.isPaused(this) && Enforcer.isPinLocked(this, pkg) && !Guard.isUnlocked(pkg)) {
+            // Leave the screen first, then ask for the PIN: the lock window needs a moment to appear, and a quick
+            // click (a mouse on a TV box) could otherwise reach "Force stop" on our app's info page before it does.
+            if (pkg in Enforcer.SETTINGS_PKGS) performGlobalAction(GLOBAL_ACTION_HOME)
             LockActivity.show(this, pkg, "pin")
         }
     }
