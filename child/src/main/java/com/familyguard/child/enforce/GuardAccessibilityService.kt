@@ -33,6 +33,7 @@ class GuardAccessibilityService : AccessibilityService() {
         }
         if (pkg in YOUTUBE_PKGS) checkYoutubeSettings(e)
         if (pkg == "com.android.systemui" || pkg == "android") checkPowerMenu()
+        if (pkg in TELEGRAM_PKGS) checkTelegramSave()
         if (e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || e.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             runCatching { ActivityWatcher.onEvent(this, pkg) { appLabel(pkg) } }
         }
@@ -259,6 +260,34 @@ class GuardAccessibilityService : AccessibilityService() {
         Events.log("block", "قائمة الطاقة", "power")
     }
 
+    private var lastTgCheck = 0L
+
+    /**
+     * Telegram: closes the "save to gallery / downloads / save as" menu the moment it appears. Only short menu
+     * entries are matched, so a chat message that contains these words is left alone.
+     */
+    private fun checkTelegramSave() {
+        if (Guard.policy.restrictions["lock_tg_save"] != true) return
+        if (Guard.isPaused(this)) return
+        val now = System.currentTimeMillis()
+        if (now - lastTgCheck < 150) return
+        lastTgCheck = now
+        val roots = ArrayList<android.view.accessibility.AccessibilityNodeInfo>()
+        runCatching { rootInActiveWindow }.getOrNull()?.let { roots.add(it) }
+        runCatching { windows }.getOrNull()?.forEach { w -> runCatching { w.root }.getOrNull()?.let { roots.add(it) } }
+        val hit = roots.any { root ->
+            TG_SAVE_LABELS.any { label ->
+                root.findAccessibilityNodeInfosByText(label)?.any { n ->
+                    val t = n.text?.toString().orEmpty().trim()
+                    t.length in 3..32 && !n.isEditable && (n.isClickable || n.parent?.isClickable == true)
+                } == true
+            }
+        }
+        if (!hit) return
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        Events.log("block", "حفظ ملف من تيليغرام", "tgsave", dedupMs = 10_000L)
+    }
+
     private var lastYtCheck = 0L
 
     /** Locks YouTube's settings / history screens with the owner PIN (so watch history can't be cleared or paused). */
@@ -307,6 +336,15 @@ class GuardAccessibilityService : AccessibilityService() {
         /** True only while Android really has this service bound (the setting string alone proves nothing). */
         @Volatile var connected = false
         const val YT_SETTINGS = "youtube-settings"
+        val TELEGRAM_PKGS = setOf(
+            "org.telegram.messenger", "org.telegram.messenger.web", "org.telegram.plus",
+            "org.thunderdog.challegram", "org.telegram.messenger.beta", "tw.nekomimi.nekogram",
+        )
+        private val TG_SAVE_LABELS = listOf(
+            "Save to Gallery", "Save to Downloads", "Save to downloads", "Save As", "Save to Music",
+            "حفظ في المعرض", "حفظ إلى المعرض", "حفظ في التنزيلات", "حفظ إلى التنزيلات", "حفظ في الموسيقى",
+            "حفظ باسم", "حفظ في الاستوديو", "Enregistrer dans la galerie", "Enregistrer dans les téléchargements",
+        )
         private val POWER_OFF_LABELS = listOf("Power off", "إيقاف التشغيل", "ايقاف التشغيل", "إيقاف", "Éteindre", "Apagar")
         private val POWER_RESTART_LABELS = listOf(
             "Restart", "إعادة تشغيل", "إعادة التشغيل", "اعادة تشغيل", "Redémarrer", "Reiniciar",
