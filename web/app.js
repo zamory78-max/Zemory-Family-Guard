@@ -490,6 +490,9 @@ function renderDevice() {
   const active = document.activeElement;
   const keepSearch = active && active.id === "search";
   const caret = keepSearch ? active.selectionStart : 0;
+  // the page is rebuilt on every update from the device: keep the reader where they were
+  const keepY = S.scrollTop ? 0 : window.scrollY;
+  S.scrollTop = false;
 
   $app.innerHTML = `
   <div class="row">
@@ -505,7 +508,7 @@ function renderDevice() {
   <section id="tabBody"></section>`;
   document.getElementById("back").onclick = () => { stopDetail(); S.deviceId = null; renderDevices(); };
   document.getElementById("delTop").onclick = () => confirmDeleteDevice(d.id);
-  $app.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; renderDevice(); }));
+  $app.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; S.scrollTop = true; renderDevice(); }));
   const tbEl = document.querySelector(".topbar");
   if (tbEl) document.documentElement.style.setProperty("--tb", tbEl.offsetHeight + "px");
   const body = document.getElementById("tabBody");
@@ -515,6 +518,7 @@ function renderDevice() {
     const s = document.getElementById("search");
     if (s) { s.focus(); s.setSelectionRange(caret, caret); }
   }
+  if (keepY) window.scrollTo(0, keepY);
 }
 
 function appList() {

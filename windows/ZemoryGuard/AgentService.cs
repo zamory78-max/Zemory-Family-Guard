@@ -59,6 +59,7 @@ internal sealed class AgentService : BackgroundService
             lastWeb = DateTime.UtcNow, lastHistory = DateTime.MinValue, lastDns = DateTime.MinValue,
             lastRestrictions = DateTime.MinValue;
         var lastStatus = "";
+        var lastInstalled = DateTime.MinValue;
 
         while (!ct.IsCancellationRequested)
         {
@@ -103,6 +104,12 @@ internal sealed class AgentService : BackgroundService
                     {
                         foreach (var v in WebControl.NewVisits(_cfg.ChildUser)) _web.Url(v.Url, v.Title, v.Browser, v.TimeMs);
                         lastHistory = now;
+                    }
+
+                    if (now - lastInstalled > TimeSpan.FromMinutes(2))
+                    {
+                        lastInstalled = now;
+                        if (RefreshInstalled()) await UploadAppsAsync(false);
                     }
 
                     var status = Status.Collect(HelpersOk());
@@ -295,6 +302,11 @@ internal sealed class AgentService : BackgroundService
     private async Task UploadStateAsync(Dictionary<string, object?> status, bool force)
     {
         await _fb!.HeartbeatAsync(_cfg!.DeviceId, status);
+        await UploadAppsAsync(force);
+    }
+
+    private async Task UploadAppsAsync(bool force)
+    {
         var apps = new Dictionary<string, object?>();
         foreach (var (exe, a) in _usage.Apps)
         {
@@ -310,12 +322,64 @@ internal sealed class AgentService : BackgroundService
             };
         }
         var sig = JsonSerializer.Serialize(apps);
+        if (_cfg == null || _fb == null) return;
         if (!force && sig == _lastAppsSig && DateTime.UtcNow - _lastAppsUpload < TimeSpan.FromHours(1)) return;
         _lastAppsSig = sig;
         _lastAppsUpload = DateTime.UtcNow;
         await _fb.CommitAsync(Firebase.UpdateWrite($"devices/{_cfg.DeviceId}/meta/apps",
             new Dictionary<string, object?> { ["apps"] = apps, ["day"] = UsageStore.Today() },
             null, new[] { Firebase.ServerTime("updatedAt") }));
+    }
+
+    /// <summary>
+    /// Keeps the program list true: adds installed programs (registry) even before they were ever opened, and drops
+    /// programs whose file no longer exists. Returns true when the list changed.
+    /// </summary>
+    private bool RefreshInstalled()
+    {
+        var changed = _usage.Prune();
+        try
+        {
+            var roots = new List<(RegistryKey root, string key)>
+            {
+                (Registry.LocalMachine, @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+                (Registry.LocalMachine, @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+            };
+            var sid = WinRestrictions.SidOf(_cfg?.ChildUser ?? "");
+            if (sid != null) roots.Add((Registry.Users, sid + @"\Software\Microsoft\Windows\CurrentVersion\Uninstall"));
+            foreach (var (root, key) in roots)
+            {
+                using var k = root.OpenSubKey(key);
+                if (k == null) continue;
+                foreach (var name in k.GetSubKeyNames())
+                {
+                    try
+                    {
+                        using var e = k.OpenSubKey(name);
+                        if (e == null) continue;
+                        var label = (e.GetValue("DisplayName") as string ?? "").Trim();
+                        if (label.Length == 0 || (e.GetValue("SystemComponent") is int sc && sc == 1)) continue;
+                        if (e.GetValue("ParentKeyName") != null) continue;
+                        var icon = (e.GetValue("DisplayIcon") as string ?? "").Trim();
+                        var comma = icon.LastIndexOf(',');
+                        if (comma > 3) icon = icon[..comma];
+                        icon = icon.Trim('"');
+                        if (!icon.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || !File.Exists(icon)) continue;
+                        var exe = Path.GetFileName(icon).ToLowerInvariant();
+                        if (exe.Contains("unins") || exe.Contains("setup") || exe.Contains("install")) continue;
+                        if (_usage.Known(exe)) continue;
+                        _usage.Add(exe, 0, icon, label, (e.GetValue("DisplayVersion") as string ?? "").Trim());
+                        changed = true;
+                    }
+                    catch { }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Write("installed scan: " + ex.Message);
+        }
+        return changed;
     }
 
     private string _lastAppsSig = "";
@@ -700,6 +764,18 @@ internal sealed class UsageStore
             if (version.Length > 0) a.Version = version;
             if (a.Label.Length == 0) a.Label = exe;
             _dirty = true;
+        }
+    }
+
+    /// <summary>Removes programs whose file has been deleted (uninstalled).</summary>
+    public bool Prune()
+    {
+        lock (_gate)
+        {
+            var gone = Apps.Where(kv => kv.Value.Path.Length > 0 && !File.Exists(kv.Value.Path)).Select(kv => kv.Key).ToList();
+            foreach (var k in gone) { Apps.Remove(k); Seconds.Remove(k); }
+            if (gone.Count > 0) _dirty = true;
+            return gone.Count > 0;
         }
     }
 

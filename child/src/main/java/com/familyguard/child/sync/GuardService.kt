@@ -68,6 +68,33 @@ class GuardService : Service() {
         listen()
         loop()
         fastWatch()
+        watchPackages()
+    }
+
+    private var pkgReceiver: android.content.BroadcastReceiver? = null
+
+    /** Installing or removing an app updates the parent's app list within seconds, not at the next 15-minute upload. */
+    private fun watchPackages() {
+        if (pkgReceiver != null) return
+        val r = object : android.content.BroadcastReceiver() {
+            private var pending = false
+            override fun onReceive(c: Context?, i: Intent?) {
+                if (pending) return
+                pending = true
+                scope.launch {
+                    kotlinx.coroutines.delay(4_000L) // let several package events settle
+                    pending = false
+                    runCatching { uploadState(true) }.onFailure { Log.w(TAG, "pkg upload", it) }
+                }
+            }
+        }
+        val f = android.content.IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        runCatching { registerReceiver(r, f) }.onSuccess { pkgReceiver = r }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -76,6 +103,8 @@ class GuardService : Service() {
     }
 
     override fun onDestroy() {
+        pkgReceiver?.let { runCatching { unregisterReceiver(it) } }
+        pkgReceiver = null
         policyReg?.remove()
         cmdReg?.remove()
         scope.cancel()
