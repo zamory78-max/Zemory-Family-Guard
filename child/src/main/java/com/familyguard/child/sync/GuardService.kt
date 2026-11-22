@@ -338,6 +338,9 @@ class GuardService : Service() {
             val level = i.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
             val scale = i.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100)
             if (level < 0 || scale <= 0) return emptyMap()
+            // TV boxes have no battery: some firmwares still report 0% -> do not show it
+            if (!i.getBooleanExtra(android.os.BatteryManager.EXTRA_PRESENT, true)) return emptyMap()
+            if (level == 0 && i.getIntExtra(android.os.BatteryManager.EXTRA_VOLTAGE, 0) <= 0) return emptyMap()
             val pct = ((level * 100f / scale) / 5f).toInt() * 5
             val st = i.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
             val charging = st == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||

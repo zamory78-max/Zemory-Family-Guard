@@ -314,7 +314,7 @@ function deviceIssues(d) {
   if (st.battery === false && d.type !== "tv") out.push(["قد يوقفه توفير البطارية", "warn"]);
   if (!(d.policy && d.policy.pinHash)) out.push(["لم يُعيَّن رمز المالك", "warn"]);
   if (st.paused) out.push(["متوقف مؤقتاً", "warn"]);
-  if (typeof st.batteryLevel === "number" && !st.charging && st.batteryLevel <= 15) out.push([`البطارية منخفضة ${st.batteryLevel}%`, "warn"]);
+  if (typeof st.batteryLevel === "number" && !st.charging && st.batteryLevel <= 15 && !(d.type === "tv" && st.batteryLevel === 0)) out.push([`البطارية منخفضة ${st.batteryLevel}%`, "warn"]);
   return out;
 }
 const deviceWarnings = (d) => deviceIssues(d).map(([t]) => t);
@@ -322,6 +322,7 @@ const deviceWarnings = (d) => deviceIssues(d).map(([t]) => t);
 function batteryBadge(d) {
   const st = d.status || {};
   if (typeof st.batteryLevel !== "number") return "";
+  if (d.type === "tv" && st.batteryLevel === 0) return "";
   const lvl = st.batteryLevel;
   const cls = !st.charging && lvl <= 15 ? "danger" : !st.charging && lvl <= 30 ? "warn" : "ok";
   return `<span class="badge ${cls}" title="مستوى البطارية">${st.charging ? "⚡" : "🔋"} ${lvl}%</span>`;
