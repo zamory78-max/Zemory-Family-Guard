@@ -66,6 +66,38 @@ class GuardAccessibilityService : AccessibilityService() {
     }
 
     private var lastSettingsLock = 0L
+    private var lastKeyAt = 0L
+
+    /**
+     * Remote-control buttons managed from the parent app. Only the "Settings" button for now: it can be left alone,
+     * switched off, or made to open another app. Returning true swallows the press so Android never sees it.
+     */
+    override fun onKeyEvent(event: android.view.KeyEvent?): Boolean {
+        val ev = event ?: return false
+        val p = Guard.policy
+        if (p.keyLearn && ev.action == android.view.KeyEvent.ACTION_DOWN && ev.repeatCount == 0) {
+            Events.log("info", "زر الريموت", "code=${ev.keyCode} (${android.view.KeyEvent.keyCodeToString(ev.keyCode)})", dedupMs = 800L)
+        }
+        if (p.keySettingsMode == "default") return false
+        val isSettingsKey = ev.keyCode == android.view.KeyEvent.KEYCODE_SETTINGS || ev.keyCode in p.keySettingsCodes
+        if (!isSettingsKey) return false
+        if (Guard.isPaused(this)) return false
+        if (ev.action == android.view.KeyEvent.ACTION_DOWN && ev.repeatCount == 0) {
+            val now = System.currentTimeMillis()
+            if (p.keySettingsMode == "app" && p.keySettingsPkg.isNotEmpty() && now - lastKeyAt > 800L) {
+                lastKeyAt = now
+                runCatching {
+                    val pm = packageManager
+                    val i = pm.getLeanbackLaunchIntentForPackage(p.keySettingsPkg) ?: pm.getLaunchIntentForPackage(p.keySettingsPkg)
+                    if (i != null) {
+                        i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(i)
+                    }
+                }
+            }
+        }
+        return true
+    }
 
     private fun fastSettingsLock(e: AccessibilityEvent): Boolean {
         val pkg = e.packageName?.toString() ?: return false

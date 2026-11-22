@@ -368,6 +368,7 @@ const DEFAULT_POLICY = {
   web: { filter: false, log: true, safeSearch: false, blockYoutube: false, blockAds: false, blocked: [], allowOnly: false, allowed: [], blockedPaths: [] },
   bedtime: { enabled: false, start: "21:00", end: "07:00", allowed: [] },
   activity: { enabled: false, apps: [] },
+  keys: { settings: { mode: "default", pkg: "", codes: [] }, learn: false },
   screen: { enabled: false, mode: "allowed", allowed: [], days: Object.fromEntries([0, 1, 2, 3, 4, 5, 6].map((i) => [String(i), { on: true, start: "07:00", end: "21:00" }])) },
   pauseAll: false, lockNow: false, overrideMinutes: 30, unlockMinutes: 10, maxAttempts: 5, lockoutMinutes: 5,
 };
@@ -920,7 +921,7 @@ function tabRequests(el) {
 
 // ----- tab: reports -----
 const EV = {
-  activity: ["🧭", "نشاط داخل تطبيق"], block: ["⛔", "حظر تطبيق"], web: ["🚫", "موقع محظور"], unlock: ["🔓", "سماح برمز المالك"],
+  info: ["🔘", "زر الريموت"], activity: ["🧭", "نشاط داخل تطبيق"], block: ["⛔", "حظر تطبيق"], web: ["🚫", "موقع محظور"], unlock: ["🔓", "سماح برمز المالك"],
   tamper: ["⚠️", "تغيّر في الحماية"], safemode: ["🟠", "الوضع الآمن"], boot: ["🔄", "تشغيل الجهاز"], hold: ["🔒", "قفل الشاشة"], lockout: ["⛔", "محاولات رمز خاطئة كثيرة"],
 };
 // ----- reports helpers -----
@@ -1277,6 +1278,32 @@ const WIN_RULES = [
   ["win_no_usb_storage", "منع الفلاشات وأقراص USB", "يطبّق على كل الحسابات."],
 ];
 
+function keysCard(p) {
+  const k = (p.keys && p.keys.settings) || { mode: "default", pkg: "", codes: [] };
+  const learn = !!(p.keys && p.keys.learn);
+  const apps = appList().filter((x) => x.launchable && x.installed && !x.hidden).sort((a, b) => a.label.localeCompare(b.label, "ar"));
+  return `
+    <div class="card stack">
+      <h2>أزرار الريموت</h2>
+      <p class="small muted">يعمل على التلفاز والبوكس (يحتاج خدمة إمكانية الوصول). غيّر هنا متى شئت دون أن تلمس الجهاز.</p>
+      <label class="field"><span>زر الإعدادات ⚙️ في الريموت</span>
+        <select class="input" id="keySetMode">
+          <option value="default" ${k.mode === "default" ? "selected" : ""}>كما هو (يفتح الإعدادات)</option>
+          <option value="none" ${k.mode === "none" ? "selected" : ""}>تعطيله (لا يفعل شيئاً)</option>
+          <option value="app" ${k.mode === "app" ? "selected" : ""}>تشغيل تطبيق آخر</option>
+        </select></label>
+      <label class="field" id="keySetAppBox" ${k.mode === "app" ? "" : 'style="display:none"'}><span>التطبيق الذي يفتحه الزر</span>
+        <select class="input" id="keySetApp">
+          <option value="">— اختر تطبيقاً —</option>
+          ${apps.map((a) => `<option value="${esc(a.pkg)}" ${k.pkg === a.pkg ? "selected" : ""}>${esc(a.label)}</option>`).join("")}
+        </select></label>
+      <div class="setting"><div class="txt"><b>وضع تعلّم الأزرار</b><span class="small muted">يسجّل في «النشاط» رمز كل زر يضغطه الطفل أو أنت على الريموت. استعمله إن لم يستجب زر الإعدادات، ثم أخبرني بالرمز. أطفئه بعد الانتهاء.</span></div>
+        <label class="switch"><input type="checkbox" id="keyLearn" ${learn ? "checked" : ""}></label></div>
+      <label class="field"><span>أرقام أزرار إضافية تُعامل كزر الإعدادات (اختياري، مفصولة بفاصلة)</span>
+        <input class="input mono" id="keySetCodes" value="${esc((k.codes || []).join(","))}" placeholder="مثال: 82,176"></label>
+    </div>`;
+}
+
 function tabRules(el) {
   const p = pol();
   const r = p.restrictions || {};
@@ -1315,6 +1342,7 @@ function tabRules(el) {
         <div class="setting"><div class="txt"><b>${esc(t)}</b>${!full && !RULES_NORMAL.has(k) ? ` <span class="badge warn">تحتاج حماية كاملة</span>` : ""}${h ? `<span class="small muted">${esc(h)}</span>` : ""}</div>
           <label class="switch"><input type="checkbox" data-rule="${k}" ${r[k] ? "checked" : ""}></label></div>`).join("")}`}
     </div>
+    ${pc ? "" : keysCard(p)}
   </div>`;
   document.getElementById("pinForm").onsubmit = async (e) => {
     e.preventDefault();
@@ -1335,6 +1363,20 @@ function tabRules(el) {
   saveMin("lockMin", "lockoutMinutes");
   const ma = document.getElementById("maxAtt");
   if (ma) ma.onchange = () => { const v = Math.max(0, Math.min(50, parseInt(ma.value, 10) || 0)); ma.value = v; run(updateDoc(devRef(), { "policy.maxAttempts": v }), "تم الحفظ"); };
+  const kMode = document.getElementById("keySetMode");
+  if (kMode) {
+    const kApp = document.getElementById("keySetApp");
+    const kCodes = document.getElementById("keySetCodes");
+    const saveKeys = () => {
+      const codes = (kCodes.value || "").split(/[,\s]+/).map((x) => parseInt(x, 10)).filter((n) => Number.isInteger(n) && n > 0 && n < 400);
+      document.getElementById("keySetAppBox").style.display = kMode.value === "app" ? "" : "none";
+      run(updateDoc(devRef(), { "policy.keys.settings": { mode: kMode.value, pkg: kApp.value || "", codes } }), "تم الحفظ");
+    };
+    kMode.onchange = saveKeys;
+    kApp.onchange = saveKeys;
+    kCodes.onchange = saveKeys;
+    document.getElementById("keyLearn").onchange = (ev) => run(updateDoc(devRef(), { "policy.keys.learn": ev.target.checked }), "تم الحفظ");
+  }
   el.querySelectorAll("[data-rule]").forEach((i) => (i.onchange = () => {
     const save = () => run(updateDoc(devRef(), new FieldPath("policy", "restrictions", i.dataset.rule), i.checked), "تم الحفظ");
     if (i.dataset.rule === "no_debugging_features" && i.checked) {

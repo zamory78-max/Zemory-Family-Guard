@@ -43,6 +43,13 @@ data class Policy(
     /** Log where the child goes inside the chosen apps (approximate, from the accessibility service). */
     val activityEnabled: Boolean = false,
     val activityApps: Set<String> = emptySet(),
+    /** Remote-control "Settings" button: "default" (untouched), "none" (does nothing) or "app" (opens [keySettingsPkg]). */
+    val keySettingsMode: String = "default",
+    val keySettingsPkg: String = "",
+    /** Show the code of every remote button pressed in the activity log (to find an unusual button's code). */
+    val keyLearn: Boolean = false,
+    /** Extra key codes that count as the Settings button (some remotes send a vendor-specific code). */
+    val keySettingsCodes: Set<Int> = emptySet(),
 ) {
     /** One weekday of the screen schedule. [on] false = no limit on that day. Minutes since midnight. */
     data class ScreenDay(val on: Boolean, val start: Int, val end: Int)
@@ -105,6 +112,8 @@ data class Policy(
             val bed = o.optJSONObject("bedtime") ?: JSONObject()
             val screen = o.optJSONObject("screen") ?: JSONObject()
             val activity = o.optJSONObject("activity") ?: JSONObject()
+            val keys = o.optJSONObject("keys") ?: JSONObject()
+            val ks = keys.optJSONObject("settings") ?: JSONObject()
             return Policy(
                 blocked = o.optJSONArray("blocked").strings(),
                 hidden = o.optJSONArray("hidden").strings(),
@@ -139,6 +148,10 @@ data class Policy(
                 screenDays = parseScreenDays(screen.optJSONObject("days")),
                 activityEnabled = activity.optBoolean("enabled", false),
                 activityApps = activity.optJSONArray("apps").strings(),
+                keySettingsMode = ks.optString("mode", "default").let { if (it == "none" || it == "app") it else "default" },
+                keySettingsPkg = ks.optString("pkg", ""),
+                keyLearn = keys.optBoolean("learn", false),
+                keySettingsCodes = ks.optJSONArray("codes").strings().mapNotNull { it.toIntOrNull() }.toSet(),
             )
         }
 
