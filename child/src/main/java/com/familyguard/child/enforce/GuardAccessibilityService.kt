@@ -25,6 +25,9 @@ class GuardAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val e = event ?: return
+        // FIRST, and as cheaply as possible: a locked Settings app must disappear immediately. On a slow TV box every
+        // extra check delays this by a fraction of a second, which is enough for a quick mouse click on "Force stop".
+        if (fastSettingsLock(e)) return
         checkAllWindows() // TYPE_WINDOWS_CHANGED events carry no package, so look before the package check
         if (e.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) rememberClick(e)
         val pkg = e.packageName?.toString() ?: return
@@ -60,6 +63,32 @@ class GuardAccessibilityService : AccessibilityService() {
                 }
             }
         }
+    }
+
+    private var lastSettingsLock = 0L
+
+    private fun fastSettingsLock(e: AccessibilityEvent): Boolean {
+        val pkg = e.packageName?.toString() ?: return false
+        if (pkg !in Enforcer.SETTINGS_PKGS) return false
+        val p = Guard.policy
+        if (p.pinHash.isEmpty() || p.restrictions["lock_settings"] != true) return false
+        if (Guard.isUnlocked(pkg) || Guard.isPaused(this)) return false
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        val now = System.currentTimeMillis()
+        if (now - lastSettingsLock > 1_500L) {
+            lastSettingsLock = now
+            Events.log("block", appLabel(pkg), "pin")
+            LockActivity.show(this, pkg, "pin")
+            // Settings may still be starting up on a slow box and come back on top: leave it again a moment later.
+            val h = Handler(Looper.getMainLooper())
+            for (d in longArrayOf(250L, 600L, 1_200L)) {
+                h.postDelayed({
+                    val top = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
+                    if (top != null && top in Enforcer.SETTINGS_PKGS && !Guard.isUnlocked(top)) performGlobalAction(GLOBAL_ACTION_HOME)
+                }, d)
+            }
+        }
+        return true
     }
 
     private val recentClicks = ArrayDeque<Pair<Long, String>>()
