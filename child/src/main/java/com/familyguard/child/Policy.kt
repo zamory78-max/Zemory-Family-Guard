@@ -50,6 +50,10 @@ data class Policy(
     val keyLearn: Boolean = false,
     /** Extra key codes that count as the Settings button (some remotes send a vendor-specific code). */
     val keySettingsCodes: Set<Int> = emptySet(),
+    /** Any other remote button (e.g. the YouTube shortcut): same modes, matched only by [keyOtherCodes]. */
+    val keyOtherMode: String = "default",
+    val keyOtherPkg: String = "",
+    val keyOtherCodes: Set<Int> = emptySet(),
 ) {
     /** One weekday of the screen schedule. [on] false = no limit on that day. Minutes since midnight. */
     data class ScreenDay(val on: Boolean, val start: Int, val end: Int)
@@ -114,6 +118,7 @@ data class Policy(
             val activity = o.optJSONObject("activity") ?: JSONObject()
             val keys = o.optJSONObject("keys") ?: JSONObject()
             val ks = keys.optJSONObject("settings") ?: JSONObject()
+            val ko = keys.optJSONObject("other") ?: JSONObject()
             return Policy(
                 blocked = o.optJSONArray("blocked").strings(),
                 hidden = o.optJSONArray("hidden").strings(),
@@ -152,6 +157,9 @@ data class Policy(
                 keySettingsPkg = ks.optString("pkg", ""),
                 keyLearn = keys.optBoolean("learn", false),
                 keySettingsCodes = ks.optJSONArray("codes").strings().mapNotNull { it.toIntOrNull() }.toSet(),
+                keyOtherMode = ko.optString("mode", "default").let { if (it == "none" || it == "app") it else "default" },
+                keyOtherPkg = ko.optString("pkg", ""),
+                keyOtherCodes = ko.optJSONArray("codes").strings().mapNotNull { it.toIntOrNull() }.toSet(),
             )
         }
 

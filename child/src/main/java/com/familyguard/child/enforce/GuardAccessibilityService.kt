@@ -78,17 +78,21 @@ class GuardAccessibilityService : AccessibilityService() {
         if (p.keyLearn && ev.action == android.view.KeyEvent.ACTION_DOWN && ev.repeatCount == 0) {
             Events.log("info", "زر الريموت", "code=${ev.keyCode} (${android.view.KeyEvent.keyCodeToString(ev.keyCode)})", dedupMs = 800L)
         }
-        if (p.keySettingsMode == "default") return false
         val isSettingsKey = ev.keyCode == android.view.KeyEvent.KEYCODE_SETTINGS || ev.keyCode in p.keySettingsCodes
-        if (!isSettingsKey) return false
+        val isOtherKey = ev.keyCode in p.keyOtherCodes
+        val mode: String
+        val pkg: String
+        if (isOtherKey && p.keyOtherMode != "default") { mode = p.keyOtherMode; pkg = p.keyOtherPkg }
+        else if (isSettingsKey && p.keySettingsMode != "default") { mode = p.keySettingsMode; pkg = p.keySettingsPkg }
+        else return false
         if (Guard.isPaused(this)) return false
         if (ev.action == android.view.KeyEvent.ACTION_DOWN && ev.repeatCount == 0) {
             val now = System.currentTimeMillis()
-            if (p.keySettingsMode == "app" && p.keySettingsPkg.isNotEmpty() && now - lastKeyAt > 800L) {
+            if (mode == "app" && pkg.isNotEmpty() && now - lastKeyAt > 800L) {
                 lastKeyAt = now
                 runCatching {
                     val pm = packageManager
-                    val i = pm.getLeanbackLaunchIntentForPackage(p.keySettingsPkg) ?: pm.getLaunchIntentForPackage(p.keySettingsPkg)
+                    val i = pm.getLeanbackLaunchIntentForPackage(pkg) ?: pm.getLaunchIntentForPackage(pkg)
                     if (i != null) {
                         i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                         startActivity(i)

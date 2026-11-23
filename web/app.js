@@ -1282,6 +1282,8 @@ const WIN_RULES = [
 function keysCard(p) {
   const k = (p.keys && p.keys.settings) || { mode: "default", pkg: "", codes: [] };
   const learn = !!(p.keys && p.keys.learn);
+  const o = (p.keys && p.keys.other) || { mode: "default", pkg: "", codes: [] };
+  const seen = [...new Set((S.events || []).filter((e) => e.type === "info" && e.label === "زر الريموت").map((e) => e.detail || ""))].slice(0, 6);
   const apps = appList().filter((x) => x.launchable && x.installed && !x.hidden).sort((a, b) => a.label.localeCompare(b.label, "ar"));
   return `
     <div class="card stack">
@@ -1302,6 +1304,21 @@ function keysCard(p) {
         <label class="switch"><input type="checkbox" id="keyLearn" ${learn ? "checked" : ""}></label></div>
       <label class="field"><span>أرقام أزرار إضافية تُعامل كزر الإعدادات (اختياري، مفصولة بفاصلة)</span>
         <input class="input mono" id="keySetCodes" value="${esc((k.codes || []).join(","))}" placeholder="مثال: 82,176"></label>
+      <h3 style="margin-top:8px">زر آخر (مثل زر YouTube أو Netflix)</h3>
+      <p class="small muted">فعّل «وضع تعلّم الأزرار»، اضغط الزر على الريموت، ثم انسخ رقمه من هنا${seen.length ? ": <span class=\"mono\">" + seen.map(esc).join(" ، ") + "</span>" : " (لم يُسجَّل شيء بعد)"}.</p>
+      <label class="field"><span>رقم الزر</span>
+        <input class="input mono" id="keyOtherCodes" value="${esc((o.codes || []).join(","))}" placeholder="مثال: 258"></label>
+      <label class="field"><span>ماذا يفعل هذا الزر</span>
+        <select class="input" id="keyOtherMode">
+          <option value="default" ${o.mode === "default" ? "selected" : ""}>كما هو</option>
+          <option value="none" ${o.mode === "none" ? "selected" : ""}>تعطيله</option>
+          <option value="app" ${o.mode === "app" ? "selected" : ""}>تشغيل تطبيق آخر</option>
+        </select></label>
+      <label class="field" id="keyOtherAppBox" ${o.mode === "app" ? "" : 'style="display:none"'}><span>التطبيق الذي يفتحه</span>
+        <select class="input" id="keyOtherApp">
+          <option value="">— اختر تطبيقاً —</option>
+          ${apps.map((a) => `<option value="${esc(a.pkg)}" ${o.pkg === a.pkg ? "selected" : ""}>${esc(a.label)}</option>`).join("")}
+        </select></label>
     </div>`;
 }
 
@@ -1376,6 +1393,13 @@ function tabRules(el) {
     kMode.onchange = saveKeys;
     kApp.onchange = saveKeys;
     kCodes.onchange = saveKeys;
+    const oMode = document.getElementById("keyOtherMode"), oApp = document.getElementById("keyOtherApp"), oCodes = document.getElementById("keyOtherCodes");
+    const saveOther = () => {
+      const codes = (oCodes.value || "").split(/[,\s]+/).map((x) => parseInt(x, 10)).filter((n) => Number.isInteger(n) && n > 0 && n < 400);
+      document.getElementById("keyOtherAppBox").style.display = oMode.value === "app" ? "" : "none";
+      run(updateDoc(devRef(), { "policy.keys.other": { mode: oMode.value, pkg: oApp.value || "", codes } }), "تم الحفظ");
+    };
+    oMode.onchange = saveOther; oApp.onchange = saveOther; oCodes.onchange = saveOther;
     document.getElementById("keyLearn").onchange = (ev) => run(updateDoc(devRef(), { "policy.keys.learn": ev.target.checked }), "تم الحفظ");
   }
   el.querySelectorAll("[data-rule]").forEach((i) => (i.onchange = () => {
